@@ -131,7 +131,9 @@ class EvalAgent(autonomous_agent.AutonomousAgent):
 
     if self.cpp:
       current_folder = pathlib.Path(__file__).parent.resolve()
-      comm_folder = os.path.join(current_folder, 'comm_files')
+      comm_folder = os.environ.get('CARL_COMM_FOLDER', os.path.join(current_folder, 'comm_files'))
+      comm_folder = os.path.abspath(os.path.expanduser(comm_folder))
+      pathlib.Path(comm_folder).mkdir(parents=True, exist_ok=True)
 
       ppo_cpp_install_path = os.environ.get('PPO_CPP_INSTALL_PATH')
       path_to_comm = str(comm_folder)
@@ -156,7 +158,6 @@ class EvalAgent(autonomous_agent.AutonomousAgent):
           shell=True)
       self.context = zmq.Context()
       self.socket = self.context.socket(zmq.PAIR)
-      pathlib.Path(comm_folder).mkdir(parents=True, exist_ok=True)
       communication_file = os.path.join(comm_folder, str(self.port))
       # Connect to python process receiving up to date config file.
       self.socket.connect(f'ipc://{communication_file}.lock')

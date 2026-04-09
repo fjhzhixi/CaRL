@@ -709,7 +709,8 @@ def main():
     socket_list.append(context.socket(zmq.PAIR))
 
     current_folder = pathlib.Path(__file__).parent.resolve()
-    comm_folder = os.path.join(current_folder, 'comm_files')
+    comm_folder = os.environ.get('CARL_COMM_FOLDER', os.path.join(current_folder, 'comm_files'))
+    comm_folder = os.path.abspath(os.path.expanduser(comm_folder))
     pathlib.Path(comm_folder).mkdir(parents=True, exist_ok=True)
     communication_file = os.path.join(comm_folder, str(args.ports[args.num_envs_per_proc * local_rank + i]))
     socket_list[i].bind(f'ipc://{communication_file}.conf_lock')

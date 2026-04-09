@@ -179,6 +179,13 @@ if __name__ == '__main__':
                         help='/path/to/custom_carla_container.sif')
 
     args, unknown = parser.parse_known_args()
+    if 'CONDA_PREFIX' in os.environ:
+      lib_prefix = os.environ['CONDA_PREFIX']       # conda 环境
+    elif sys.prefix != sys.base_prefix:
+      lib_prefix = sys.prefix                       # venv 环境
+    else:
+      lib_prefix = None                             # 系统 Python，不注入
+    ld_lib_prefix = f'LD_LIBRARY_PATH={lib_prefix}/lib:$LD_LIBRARY_PATH ' if lib_prefix else ''
     git_root = args.git_root
     raw_logdir = os.path.join(git_root, 'results')
     logdir = os.path.join(raw_logdir, args.exp_name)
@@ -314,7 +321,7 @@ if __name__ == '__main__':
           else:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
-                  f'LD_LIBRARY_PATH={os.environ["CONDA_PREFIX"]}/lib:$LD_LIBRARY_PATH '
+                  f'{ld_lib_prefix}'
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
                     f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',
@@ -325,7 +332,7 @@ if __name__ == '__main__':
           print(f'Start client {i}')
           leaderboard_processes.append(
               subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
-                f'LD_LIBRARY_PATH={os.environ["CONDA_PREFIX"]}/lib:$LD_LIBRARY_PATH '
+                f'{ld_lib_prefix}'
                   f'bash start_leaderboard.sh {git_root} {route_files[i]} {logdir} '
                   f'{i} {client_ports[i]} {traffic_manager_ports[i]} {rl_ports[i]} {args.seed} {skip_next_route} '
                   f'{args.route_repetitions}',
@@ -348,7 +355,7 @@ if __name__ == '__main__':
           else:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
-                  f'LD_LIBRARY_PATH={os.environ["CONDA_PREFIX"]}/lib:$LD_LIBRARY_PATH '
+                  f'{ld_lib_prefix}'
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
                     f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',

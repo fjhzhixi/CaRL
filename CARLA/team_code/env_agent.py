@@ -117,7 +117,8 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     self.context = zmq.Context()
     conf_socket = self.context.socket(zmq.PAIR)
     current_folder = pathlib.Path(__file__).parent.resolve()
-    comm_folder = os.path.join(current_folder, 'comm_files')
+    comm_folder = os.environ.get('CARL_COMM_FOLDER', os.path.join(current_folder, 'comm_files'))
+    comm_folder = os.path.abspath(os.path.expanduser(comm_folder))
     pathlib.Path(comm_folder).mkdir(parents=True, exist_ok=True)
     communication_file = os.path.join(comm_folder, str(self.port))
     # Connect to python process receiving up to date config file.
