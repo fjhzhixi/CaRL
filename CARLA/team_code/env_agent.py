@@ -165,6 +165,19 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     self.socket.send_string(f'Connected to env_agent client. {self.port}')
 
     self.config.debug = int(os.environ.get('DEBUG_ENV_AGENT', 0)) == 1
+
+    # Set up per-experiment visualization directory: {SAVE_PATH}/{exp_name}/
+    if self.config.debug and self.save_path is not None:
+      self.vis_root = os.path.join(self.save_path, self.config.exp_name)
+      self.bev_vis_dir = os.path.join(self.vis_root, 'bev_observation')
+      os.makedirs(self.bev_vis_dir, exist_ok=True)
+      if self.config.use_camera:
+        self.cam_vis_dirs = {}
+        for cam_id in self.config.get_camera_ids():
+          d = os.path.join(self.vis_root, f'camera_{cam_id}')
+          os.makedirs(d, exist_ok=True)
+          self.cam_vis_dirs[cam_id] = d
+
     if self.config.use_new_bev_obs:
       self.bev_semantics_manager = ObsManager2(self.config)
     else:
@@ -245,8 +258,8 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     if debug:
       observations['rendered'] = bev_semantics['rendered']
 
-    if self.config.debug:
-      Image.fromarray(bev_semantics['rendered']).save(self.save_path + (f'/{self.step:04}.png'))
+    if self.config.debug and self.save_path is not None:
+      Image.fromarray(bev_semantics['rendered']).save(os.path.join(self.bev_vis_dir, f'{self.step:04}.png'))
 
     last_control = self.vehicle.get_control()
     velocity = self.vehicle.get_velocity()
@@ -398,6 +411,10 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
         camera_images.append(cam_rgb)
       obs['camera_images'] = np.stack(camera_images, axis=0).astype(np.uint8)  # (N, H, W, 3)
       self.last_camera_obs = obs['camera_images']
+
+      if self.config.debug and self.save_path is not None:
+        for i, cam_id in enumerate(camera_ids):
+          Image.fromarray(camera_images[i]).save(os.path.join(self.cam_vis_dirs[cam_id], f'{self.step:04}.png'))
 
     reward, termination, truncation, exploration_suggest = self.reward_handler.get(timestamp, waypoint_route,
                                                                                    collision_with_pedestrian,

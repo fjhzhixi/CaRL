@@ -354,3 +354,85 @@ The PPO data flow in `CaRL/CARLA` is a request-response pipeline:
 The true producer of training samples is `env_agent.py`.
 The true consumer is `dd_ppo.py`.
 `env_gym.py` is the transport bridge between them.
+
+## PPO Training Flowchart
+
+The following flowchart summarizes the current PPO training loop implemented in `team_code/dd_ppo.py`.
+
+```mermaid
+flowchart TD
+    A[Initialize env, agent, optimizer, and rollout buffers] --> B[env.reset -> next_obs, next_done, next_lstm_state]
+    B --> C[Enter PPO update loop]
+
+    C --> D[Cleanup previous iteration state<br/>switch device if cpu_collect]
+    D --> E[Update learning rate schedule]
+    E --> F[Start data collection]
+
+    F --> G[For each rollout step]
+    G --> H[Store current next_obs and done into rollout buffers]
+    H --> I[agent.forward(next_obs, lstm_state, done)<br/>-> action, logprob, value, mu, sigma, next_lstm_state]
+    I --> J[env.step(action)]
+    J --> K[Receive reward, termination, truncation, info, and next_obs]
+    K --> L[Convert next_obs and done to tensors<br/>record reward, action, logprob, value]
+    L --> M[Process final_info and episodic stats]
+    M --> N{dd-ppo preempt enabled?}
+    N -->|No| O{More rollout steps?}
+    N -->|Yes| P{Reached early stop condition?}
+    P -->|Yes| Q[Break rollout early]
+    P -->|No| O
+    O -->|Yes| G
+    O -->|No| R[Finish data collection]
+    Q --> R
+
+    R --> S[Bootstrap value from final next_obs]
+    S --> T[Compute advantages and returns<br/>using GAE or discounted returns]
+    T --> U[Reconstruct optional exploration targets]
+    U --> V[Flatten rollout buffers into training tensors<br/>b_obs, b_actions, b_logprobs, b_returns, b_advantages, ...]
+    V --> W{cpu_collect enabled?}
+    W -->|Yes| X[Move flattened tensors to training device]
+    W -->|No| Y[Keep tensors on current device]
+    X --> Z[Barrier and all_reduce episodic statistics]
+    Y --> Z
+    Z --> AA[Rank 0 logs episodic metrics<br/>and may save best model]
+    AA --> AB[Prepare minibatch indices]
+    AB --> AC[Finish data pre-processing]
+
+    AC --> AD[Start PPO optimization]
+    AD --> AE[For each PPO epoch]
+    AE --> AF[Shuffle sample indices or environment indices]
+    AF --> AG[For each minibatch]
+    AG --> AH[Run forward pass on minibatch<br/>to get new logprob, entropy, new value]
+    AH --> AI[Compute ratio, policy loss, value loss, entropy loss]
+    AI --> AJ[Optionally add exploration loss]
+    AJ --> AK[optimizer.zero_grad]
+    AK --> AL[loss.backward]
+    AL --> AM[Clip gradients and optimizer.step]
+    AM --> AN[Record approx_kl and clipfrac]
+    AN --> AO{More minibatches?}
+    AO -->|Yes| AG
+    AO -->|No| AP[Barrier and all_reduce approx_kl]
+    AP --> AQ{KL early stop triggered?}
+    AQ -->|Yes| AR[Exit epoch loop]
+    AQ -->|No| AS{More epochs?}
+    AS -->|Yes| AE
+    AS -->|No| AT[Finish PPO optimization]
+    AR --> AT
+
+    AT --> AU[All_reduce losses and summary tensors]
+    AU --> AV[Rank 0 writes TensorBoard logs]
+    AV --> AW[Save latest checkpoint and cleanup old checkpoints]
+    AW --> AX[Print SPS and timing statistics]
+    AX --> AY{More PPO updates?}
+    AY -->|Yes| C
+    AY -->|No| AZ[Close env and writer<br/>save final model]
+```
+
+## Reading The Flowchart
+
+At a high level, each PPO update in `dd_ppo.py` has three main stages:
+
+1. Data collection: interact with CARLA and store rollout samples.
+2. Data pre-processing: bootstrap values, compute returns and advantages, and flatten the rollout tensors.
+3. PPO training: reuse the collected batch for multiple epochs of minibatch optimization.
+
+This is a standard on-policy PPO pattern: collect one rollout with the current policy, freeze those samples as the "old policy" batch, then optimize on that batch for several epochs before collecting the next rollout.
