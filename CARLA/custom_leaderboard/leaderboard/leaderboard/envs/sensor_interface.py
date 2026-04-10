@@ -213,6 +213,12 @@ class SensorInterface(object):
         if sensor_type == 'sensor.opendrive_map': 
             self._opendrive_tag = tag
 
+    def clear(self):
+        """Reset the sensor registry so sensors can be re-registered on a new route."""
+        self._sensors_objects = {}
+        self._data_buffers = Queue()
+        self._opendrive_tag = None
+
     def update_sensor(self, tag, data, frame):
         if tag not in self._sensors_objects:
             raise SensorConfigurationInvalid("The sensor with tag [{}] has not been created!".format(tag))

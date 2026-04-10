@@ -558,6 +558,38 @@ def parse_args(config):
                       const=True,
                       help='Whether to add a constant reward every frame')
 
+  # Camera sensor arguments
+  parser.add_argument('--use_camera',
+                      type=lambda x: bool(strtobool(x)),
+                      default=config.use_camera,
+                      nargs='?',
+                      const=True,
+                      help='Whether to attach and use RGB camera sensors.')
+  parser.add_argument('--camera_mode',
+                      type=str,
+                      default=config.camera_mode,
+                      help='Camera mode: front (1 camera) or surround (6 cameras).')
+  parser.add_argument('--camera_width',
+                      type=int,
+                      default=config.camera_width,
+                      help='Camera image width in pixels.')
+  parser.add_argument('--camera_height',
+                      type=int,
+                      default=config.camera_height,
+                      help='Camera image height in pixels.')
+  parser.add_argument('--camera_fov',
+                      type=int,
+                      default=config.camera_fov,
+                      help='Camera field of view in degrees.')
+  parser.add_argument('--camera_features_dim',
+                      type=int,
+                      default=config.camera_features_dim,
+                      help='Output dimension of the camera encoder.')
+  parser.add_argument('--camera_encoder',
+                      type=str,
+                      default=config.camera_encoder,
+                      help='Camera encoder type. Options: simple_cnn')
+
   args, unknown = parser.parse_known_args()
   print('Unkown Arguments', unknown)
   # fmt: on
@@ -631,6 +663,7 @@ def main():
       )
 
     writer = SummaryWriter(exp_folder)
+    train_log_file = open(os.path.join(exp_folder, 'train.log'), 'a', encoding='utf-8', buffering=1)
     writer.add_text(
         'hyperparameters',
         '|param|value|\n|-|-|\n%s' % ('\n'.join([f'|{key}|{value}|' for key, value in vars(args).items()])),
@@ -807,6 +840,11 @@ def main():
                       env.single_observation_space.spaces['value_measurements'].shape,
                       device=device),
   }
+  if config.use_camera:
+    obs['camera_images'] = torch.zeros(
+        (local_bs_per_env, args.num_envs_per_proc) + env.single_observation_space.spaces['camera_images'].shape,
+        device=device,
+        dtype=torch.uint8)
   actions = torch.zeros((local_bs_per_env, args.num_envs_per_proc) + env.single_action_space.shape, device=device)
   old_mus = torch.zeros((local_bs_per_env, args.num_envs_per_proc) + env.single_action_space.shape, device=device)
   old_sigmas = torch.zeros((local_bs_per_env, args.num_envs_per_proc) + env.single_action_space.shape, device=device)
@@ -824,6 +862,8 @@ def main():
       'measurements': torch.tensor(reset_obs[0]['measurements'], device=device, dtype=torch.float32),
       'value_measurements': torch.tensor(reset_obs[0]['value_measurements'], device=device, dtype=torch.float32)
   }
+  if config.use_camera:
+    next_obs['camera_images'] = torch.tensor(reset_obs[0]['camera_images'], device=device, dtype=torch.uint8)
   next_done = torch.zeros(args.num_envs_per_proc, device=device)
   next_lstm_state = (
       torch.zeros(config.num_lstm_layers, args.num_envs_per_proc, config.features_dim, device=device),
@@ -837,6 +877,15 @@ def main():
 
   if rank == 0:
     avg_returns = deque(maxlen=100)
+    running_stage_time_sums = {
+        'data_collection': 0.0,
+        'total_forward': 0.0,
+        'total_env': 0.0,
+        'data_preprocessing': 0.0,
+        'training': 0.0,
+        'logging': 0.0,
+    }
+    stage_time_count = 0
   # from matplotlib import pyplot as plt
   # pyplots = []
   # fig = plt.figure(figsize=(config.obs_num_channels + 1, config.obs_num_channels + 1))
@@ -914,6 +963,8 @@ def main():
       obs['bev_semantics'][step] = next_obs['bev_semantics']
       obs['measurements'][step] = next_obs['measurements']
       obs['value_measurements'][step] = next_obs['value_measurements']
+      if config.use_camera:
+        obs['camera_images'][step] = next_obs['camera_images']
       dones[step] = next_done
 
       # ALGO LOGIC: action logic
@@ -944,11 +995,14 @@ def main():
       done = np.logical_or(termination, truncation)  # Not treated separately in original PPO
       rewards[step] = torch.tensor(reward, device=device, dtype=torch.float32)
       next_done = torch.tensor(done, device=device, dtype=torch.float32)
-      next_obs = {
+      next_obs_dict = {
           'bev_semantics': torch.tensor(next_obs['bev_semantics'], device=device, dtype=torch.uint8),
           'measurements': torch.tensor(next_obs['measurements'], device=device, dtype=torch.float32),
           'value_measurements': torch.tensor(next_obs['value_measurements'], device=device, dtype=torch.float32)
       }
+      if config.use_camera:
+        next_obs_dict['camera_images'] = torch.tensor(next_obs['camera_images'], device=device, dtype=torch.uint8)
+      next_obs = next_obs_dict
 
       if 'final_info' in info.keys():
         for idx, single_info in enumerate(info['final_info']):
@@ -973,9 +1027,12 @@ def main():
           print(f'Rank:{rank}, Preempt at step: {step}, Num done: {num_done}')
           break  # End data collection early the other workers are finished.
 
-    t0.toc(msg=f'Rank:{rank}, Data collection.')
-    print(f'Rank:{rank}, Avg forward time {sum(inference_times)}')
-    print(f'Rank:{rank}, Avg env time {sum(env_times)}')
+    data_collection_time = t0.tocvalue()
+    total_forward_time = sum(inference_times)
+    total_env_time = sum(env_times)
+    print(f'Rank:{rank}, Data collection. {data_collection_time:.6f} seconds.')
+    print(f'Rank:{rank}, Total forward time {total_forward_time:.6f}')
+    print(f'Rank:{rank}, Total env time {total_env_time:.6f}')
     t3.tic()
 
     if config.use_dd_ppo_preempt:
@@ -1042,6 +1099,9 @@ def main():
             obs['value_measurements']
             [:num_collected_steps].reshape((-1,) + env.single_observation_space.spaces['value_measurements'].shape)
     }
+    if config.use_camera:
+      b_obs['camera_images'] = obs['camera_images'][:num_collected_steps].reshape(
+          (-1,) + env.single_observation_space.spaces['camera_images'].shape)
     b_logprobs = logprobs[:num_collected_steps].reshape(-1)
     b_actions = actions[:num_collected_steps].reshape((-1,) + env.single_action_space.shape)
     b_dones = dones[:num_collected_steps].reshape(-1)  # TODO check if pre-emption trick causes problems with LSTM.
@@ -1057,6 +1117,8 @@ def main():
       b_obs['bev_semantics'] = b_obs['bev_semantics'].to(device)
       b_obs['measurements'] = b_obs['measurements'].to(device)
       b_obs['value_measurements'] = b_obs['value_measurements'].to(device)
+      if config.use_camera:
+        b_obs['camera_images'] = b_obs['camera_images'].to(device)
       b_logprobs = b_logprobs.to(device)
       b_actions = b_actions.to(device)
       b_dones = b_dones.to(device)
@@ -1119,7 +1181,8 @@ def main():
     with torch.no_grad():
       torch.cuda.empty_cache()
 
-    t3.toc(msg=f'Rank:{rank}, Data pre-processing.')
+    data_preprocessing_time = t3.tocvalue()
+    print(f'Rank:{rank}, Data pre-processing. {data_preprocessing_time:.6f} seconds.')
     t4.tic()
     for latest_epoch in range(args.update_epochs):
       approx_kl_divs = []
@@ -1155,6 +1218,8 @@ def main():
             'measurements': b_obs['measurements'][mb_inds],
             'value_measurements': b_obs['value_measurements'][mb_inds]
         }
+        if config.use_camera:
+          b_obs_sampled['camera_images'] = b_obs['camera_images'][mb_inds]
         # Don't need action, so we don't unscale
         _, newlogprob, entropy, newvalue, exploration_loss, _, _, distribution, pred_sem, pred_measure, _ = \
           agent.forward(
@@ -1250,7 +1315,8 @@ def main():
           break
 
     del b_obs  # Remove large array
-    t4.toc(msg=f'Rank:{rank}, Training.')
+    training_time = t4.tocvalue()
+    print(f'Rank:{rank}, Training. {training_time:.6f} seconds.')
     t5.tic()
 
     config.latest_iteration = update
@@ -1294,6 +1360,21 @@ def main():
     clipfracs = clipfracs / world_size
 
     if rank == 0:
+      stage_time_count += 1
+      current_stage_times = {
+          'data_collection': data_collection_time,
+          'total_forward': total_forward_time,
+          'total_env': total_env_time,
+          'data_preprocessing': data_preprocessing_time,
+          'training': training_time,
+      }
+      for stage_name, stage_time in current_stage_times.items():
+        running_stage_time_sums[stage_name] += stage_time
+        writer.add_scalar(f'timing/{stage_name}', stage_time, config.global_step)
+        writer.add_scalar(f'timing_avg/{stage_name}',
+                          running_stage_time_sums[stage_name] / stage_time_count,
+                          config.global_step)
+
       save(agent, optimizer, config, exp_folder, f'model_latest_{update:09d}.pth', f'optimizer_latest_{update:09d}.pth')
       frac = update / num_updates
       if config.current_eval_interval_idx < len(config.eval_intervals):
@@ -1337,11 +1418,29 @@ def main():
       writer.add_scalar('charts/SPS', int(local_processed_samples / (time.time() - start_time)), config.global_step)
       writer.add_scalar('charts/restart', 0, config.global_step)
 
-    t5.toc(msg=f'Rank:{rank}, Logging')
+    logging_time = t5.tocvalue()
+    print(f'Rank:{rank}, Logging. {logging_time:.6f} seconds.')
+    if rank == 0:
+      running_stage_time_sums['logging'] += logging_time
+      avg_logging_time = running_stage_time_sums['logging'] / stage_time_count
+      writer.add_scalar('timing/logging', logging_time, config.global_step)
+      writer.add_scalar('timing_avg/logging', avg_logging_time, config.global_step)
+      avg_stage_times = {stage_name: running_stage_time_sums[stage_name] / stage_time_count
+                         for stage_name in running_stage_time_sums}
+      train_log_file.write(
+          f'update={update} global_step={config.global_step} '
+          f'data_collection={data_collection_time:.6f} avg_data_collection={avg_stage_times["data_collection"]:.6f} '
+          f'total_forward={total_forward_time:.6f} avg_total_forward={avg_stage_times["total_forward"]:.6f} '
+          f'total_env={total_env_time:.6f} avg_total_env={avg_stage_times["total_env"]:.6f} '
+          f'data_preprocessing={data_preprocessing_time:.6f} '
+          f'avg_data_preprocessing={avg_stage_times["data_preprocessing"]:.6f} '
+          f'training={training_time:.6f} avg_training={avg_stage_times["training"]:.6f} '
+          f'logging={logging_time:.6f} avg_logging={avg_logging_time:.6f}\n')
 
   env.close()
   if rank == 0:
     writer.close()
+    train_log_file.close()
 
     save(agent, optimizer, config, exp_folder, 'model_final.pth', 'optimizer_final.pth')
     wandb.finish(exit_code=0, quiet=True)

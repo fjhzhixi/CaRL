@@ -33,6 +33,12 @@ class CARLAEnv(gym.Env):
         'value_measurements':
             spaces.Box(-math.inf, math.inf, shape=(config.num_value_measurements,), dtype=np.float32)
     })
+    if config.use_camera:
+      num_cameras = config.get_num_cameras()
+      self.observation_space['camera_images'] = spaces.Box(
+          0, 255,
+          shape=(num_cameras, config.camera_height, config.camera_width, 3),
+          dtype=np.uint8)
     self.action_space = spaces.Box(config.action_space_min,
                                    config.action_space_max,
                                    shape=(config.action_space_dim,),
@@ -75,6 +81,11 @@ class CARLAEnv(gym.Env):
         'value_measurements':
             np.frombuffer(data[2], dtype=np.float32)
     }
+    if self.config.use_camera:
+      num_cameras = self.config.get_num_cameras()
+      observation['camera_images'] = np.frombuffer(
+          data[9], dtype=np.uint8).reshape(
+          num_cameras, self.config.camera_height, self.config.camera_width, 3)
 
     info = {'n_steps': np.frombuffer(data[6], dtype=np.int32), 'suggest': np.frombuffer(data[7], dtype=np.int32)}
     num_sent = np.frombuffer(data[8], dtype=np.uint64).item()
@@ -100,6 +111,11 @@ class CARLAEnv(gym.Env):
         'value_measurements':
             np.frombuffer(data[2], dtype=np.float32)
     }
+    if self.config.use_camera:
+      num_cameras = self.config.get_num_cameras()
+      observation['camera_images'] = np.frombuffer(
+          data[9], dtype=np.uint8).reshape(
+          num_cameras, self.config.camera_height, self.config.camera_width, 3)
 
     reward = np.frombuffer(data[3], dtype=np.float32).item()
     termination = np.frombuffer(data[4], dtype=bool).item()  # True if agent ended in destroy method.

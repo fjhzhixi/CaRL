@@ -106,8 +106,38 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     self.initialized_route = False
     self.send_first_observation = False
 
+    # Pre-load config from experiment folder so sensors() knows camera settings
+    # before agent_global_init() receives the full config via ZMQ.
+    config_path = os.path.join(exp_folder, 'config.json')
+    if os.path.exists(config_path):
+      with open(config_path, 'rt', encoding='utf-8') as f:
+        loaded_config = jsonpickle.decode(f.read())
+      # Only update camera-related fields to avoid side effects
+      for key in ('use_camera', 'camera_mode', 'camera_width', 'camera_height',
+                  'camera_fov', 'camera_features_dim', 'camera_encoder', 'camera_sensors'):
+        if hasattr(loaded_config, key):
+          setattr(self.config, key, getattr(loaded_config, key))
+
   def sensors(self):
     sensors = []
+
+    if self.config.use_camera:
+      camera_ids = self.config.get_camera_ids()
+      for cam_id in camera_ids:
+        cam_spec = self.config.camera_sensors[cam_id]
+        sensors.append({
+            'type': 'sensor.camera.rgb',
+            'x': cam_spec['x'],
+            'y': cam_spec['y'],
+            'z': cam_spec['z'],
+            'roll': cam_spec['roll'],
+            'pitch': cam_spec['pitch'],
+            'yaw': cam_spec['yaw'],
+            'width': self.config.camera_width,
+            'height': self.config.camera_height,
+            'fov': cam_spec['fov'],
+            'id': cam_id
+        })
 
     return sensors
 
@@ -356,6 +386,19 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
 
     waypoint_route = self.get_waypoint_route()
     obs, collision_with_pedestrian, perc_off_road = self.preprocess_observation(waypoint_route, timestamp)
+
+    # Extract camera images from CARLA sensor data
+    if self.config.use_camera:
+      camera_ids = self.config.get_camera_ids()
+      camera_images = []
+      for cam_id in camera_ids:
+        # input_data[cam_id] is (frame, numpy_array) where array is (H, W, 4) BGRA
+        cam_bgra = input_data[cam_id][1]
+        cam_rgb = cam_bgra[:, :, :3][:, :, ::-1].copy()  # BGRA -> BGR -> RGB
+        camera_images.append(cam_rgb)
+      obs['camera_images'] = np.stack(camera_images, axis=0).astype(np.uint8)  # (N, H, W, 3)
+      self.last_camera_obs = obs['camera_images']
+
     reward, termination, truncation, exploration_suggest = self.reward_handler.get(timestamp, waypoint_route,
                                                                                    collision_with_pedestrian,
                                                                                    self.vehicles_all, self.walkers_all,
@@ -387,13 +430,16 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
       raise NextRoute('Episode ended by roach reward.')
     # Send observation to training server
     self.num_send += 1
-    self.socket.send_multipart(
-        (data['observation']['bev_semantics'], data['observation']['measurements'],
-         data['observation']['value_measurements'], np.array(data['reward'], dtype=np.float32),
-         np.array(data['termination'], dtype=bool), np.array(data['truncation'], dtype=bool),
-         np.array(data['info']['n_steps'], dtype=np.int32), np.array(data['info']['suggest'], dtype=np.int32),
-         np.array(self.num_send, dtype=np.uint64)),
-        copy=False)
+    msg_parts = [
+        data['observation']['bev_semantics'], data['observation']['measurements'],
+        data['observation']['value_measurements'], np.array(data['reward'], dtype=np.float32),
+        np.array(data['termination'], dtype=bool), np.array(data['truncation'], dtype=bool),
+        np.array(data['info']['n_steps'], dtype=np.int32), np.array(data['info']['suggest'], dtype=np.int32),
+        np.array(self.num_send, dtype=np.uint64)
+    ]
+    if self.config.use_camera:
+      msg_parts.append(data['observation']['camera_images'])
+    self.socket.send_multipart(msg_parts, copy=False)
 
     self.send_first_observation = True
 
@@ -442,6 +488,13 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
       print('Leaderboard ended episode.')
       waypoint_route = self.get_waypoint_route()
       obs, collision_with_pedestrian, perc_off_road = self.preprocess_observation(waypoint_route, self.last_timestamp)
+      # Re-use cached camera observation for destroy path (no input_data available)
+      if self.config.use_camera and hasattr(self, 'last_camera_obs'):
+        obs['camera_images'] = self.last_camera_obs
+      elif self.config.use_camera:
+        num_cams = self.config.get_num_cameras()
+        obs['camera_images'] = np.zeros((num_cams, self.config.camera_height, self.config.camera_width, 3),
+                                        dtype=np.uint8)
       reward, termination, _, exploration_suggest = self.reward_handler.get(self.last_timestamp, waypoint_route,
                                                                             collision_with_pedestrian,
                                                                             self.vehicles_all, self.walkers_all,
@@ -462,13 +515,16 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
       }
     # Send observation to training server
     self.num_send += 1
-    self.socket.send_multipart(
-        (data['observation']['bev_semantics'], data['observation']['measurements'],
-         data['observation']['value_measurements'], np.array(data['reward'], dtype=np.float32),
-         np.array(data['termination'], dtype=bool), np.array(data['truncation'], dtype=bool),
-         np.array(data['info']['n_steps'], dtype=np.int32), np.array(data['info']['suggest'], dtype=np.int32),
-         np.array(self.num_send, dtype=np.uint64)),
-        copy=False)
+    msg_parts = [
+        data['observation']['bev_semantics'], data['observation']['measurements'],
+        data['observation']['value_measurements'], np.array(data['reward'], dtype=np.float32),
+        np.array(data['termination'], dtype=bool), np.array(data['truncation'], dtype=bool),
+        np.array(data['info']['n_steps'], dtype=np.int32), np.array(data['info']['suggest'], dtype=np.int32),
+        np.array(self.num_send, dtype=np.uint64)
+    ]
+    if self.config.use_camera:
+      msg_parts.append(data['observation']['camera_images'])
+    self.socket.send_multipart(msg_parts, copy=False)
     self.reward_handler.destroy()
 
     if self.record_infractions and self.save_path is not None:

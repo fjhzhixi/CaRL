@@ -155,6 +155,25 @@ class GlobalConfig:
     self.obs_num_measurements = 8  # Number of scalar measurements in observation.
     self.obs_num_channels = 15  # Number of channels in the bev observation.
 
+    ####### Camera sensor parameters ############
+    self.use_camera = False  # Whether to attach and use RGB camera sensors
+    self.camera_mode = 'front'  # 'front' for 1 camera, 'surround' for 6 cameras
+    self.camera_width = 400  # Image width in pixels (default small for RL efficiency)
+    self.camera_height = 225  # Image height in pixels
+    self.camera_fov = 70  # Field of view in degrees
+    self.camera_features_dim = 256  # Output dim of camera encoder
+    self.camera_encoder = 'simple_cnn'  # Camera encoder type
+
+    # Camera sensor placements matching Bench2Drive nuScenes-style layout
+    self.camera_sensors = {
+        'CAM_FRONT': {'x': 0.80, 'y': 0.0, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'fov': 70},
+        'CAM_FRONT_LEFT': {'x': 0.27, 'y': -0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -55.0, 'fov': 70},
+        'CAM_FRONT_RIGHT': {'x': 0.27, 'y': 0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 55.0, 'fov': 70},
+        'CAM_BACK': {'x': -2.0, 'y': 0.0, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 180.0, 'fov': 110},
+        'CAM_BACK_LEFT': {'x': -0.32, 'y': -0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -110.0, 'fov': 70},
+        'CAM_BACK_RIGHT': {'x': -0.32, 'y': 0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 110.0, 'fov': 70},
+    }
+
     ####### Distribution parameters ############
     self.distribution = 'beta'  # Distribution used for the action space. Options beta, normal, beta_uni_mix
     # Minimum value for a, b of the beta distribution that the model can predict. Gets added to the softplus output.
@@ -269,3 +288,11 @@ class GlobalConfig:
   def initialize(self, **kwargs):
     for k, v in kwargs.items():
       setattr(self, k, v)
+
+  def get_num_cameras(self):
+    return 1 if self.camera_mode == 'front' else 6
+
+  def get_camera_ids(self):
+    if self.camera_mode == 'front':
+      return ['CAM_FRONT']
+    return ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']

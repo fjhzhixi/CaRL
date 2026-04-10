@@ -293,6 +293,10 @@ class AgentWrapper(object):
         self._sensors_list.clear()
         self.sensor_list_names.clear()
 
+        # Clear the sensor registry so tags can be re-registered on the next route
+        if self._agent is not None:
+            self._agent.sensor_interface.clear()
+
         # Tick once to destroy the sensors
         CarlaDataProvider.get_world().tick()
 

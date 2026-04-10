@@ -45,6 +45,46 @@ class CustomCnn(nn.Module):
     return x
 
 
+class CameraCNN(nn.Module):
+  """Lightweight CNN encoder for a single camera image."""
+
+  def __init__(self, config):
+    super().__init__()
+    self.config = config
+    self.cnn = nn.Sequential(
+        nn.Conv2d(3, 16, kernel_size=5, stride=2),
+        nn.ReLU(),
+        nn.Conv2d(16, 32, kernel_size=5, stride=2),
+        nn.ReLU(),
+        nn.Conv2d(32, 64, kernel_size=3, stride=2),
+        nn.ReLU(),
+        nn.Conv2d(64, 128, kernel_size=3, stride=2),
+        nn.ReLU(),
+    )
+    # Compute flattened size via dummy forward pass
+    with torch.no_grad():
+      dummy = torch.zeros(1, 3, config.camera_height, config.camera_width)
+      n_flatten = math.prod(self.cnn(dummy).shape[1:])
+    self.fc = nn.Sequential(
+        nn.Linear(n_flatten, config.camera_features_dim),
+        nn.ReLU(),
+    )
+    self.apply(self._weights_init)
+
+  @staticmethod
+  def _weights_init(m):
+    if isinstance(m, nn.Conv2d):
+      nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+      nn.init.constant_(m.bias, 0.1)
+
+  def forward(self, x):
+    """x: (B, 3, H, W) float32 in [0, 1]"""
+    x = self.cnn(x)
+    x = torch.flatten(x, start_dim=1)
+    x = self.fc(x)
+    return x
+
+
 # Input image feature extractor class
 class XtMaCNN(nn.Module):
   '''
@@ -141,11 +181,20 @@ class XtMaCNN(nn.Module):
 
     self.states_neurons = states_neurons[-1]
 
+    # Camera encoder (shared across all cameras)
+    self.use_camera = getattr(config, 'use_camera', False)
+    camera_total_features = 0
+    if self.use_camera:
+      self.camera_cnn = CameraCNN(config)
+      num_cameras = config.get_num_cameras()
+      camera_total_features = num_cameras * config.camera_features_dim
+
+    fusion_input_dim = self.n_flatten + states_neurons[-1] + camera_total_features
     if self.config.use_layer_norm:
-      self.linear = nn.Sequential(nn.Linear(self.n_flatten + states_neurons[-1], 512), nn.LayerNorm(512), nn.ReLU(),
+      self.linear = nn.Sequential(nn.Linear(fusion_input_dim, 512), nn.LayerNorm(512), nn.ReLU(),
                                   nn.Linear(512, config.features_dim), nn.LayerNorm(config.features_dim), nn.ReLU())
     else:
-      self.linear = nn.Sequential(nn.Linear(self.n_flatten + states_neurons[-1], 512), nn.ReLU(),
+      self.linear = nn.Sequential(nn.Linear(fusion_input_dim, 512), nn.ReLU(),
                                   nn.Linear(512, config.features_dim), nn.ReLU())
 
     states_neurons = [observation_space['measurements'].shape[0]] + list(states_neurons)
@@ -166,7 +215,7 @@ class XtMaCNN(nn.Module):
       nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
       nn.init.constant_(m.bias, 0.1)
 
-  def forward(self, bev_semantics, measurements):
+  def forward(self, bev_semantics, measurements, camera_images=None):
     if self.config.use_positional_encoding:  # CoordConv layer
       x = torch.linspace(-1, 1, self.config.bev_semantics_height)
       y = torch.linspace(-1, 1, self.config.bev_semantics_width)
@@ -182,7 +231,16 @@ class XtMaCNN(nn.Module):
     x = torch.flatten(x, start_dim=1)
     latent_state = self.state_linear(measurements)
 
-    x = torch.cat((x, latent_state), dim=1)
+    parts = [x, latent_state]
+    if self.use_camera and camera_images is not None:
+      # camera_images: (B, N, 3, H, W) float32 in [0, 1]
+      B, N = camera_images.shape[:2]
+      cam_flat = camera_images.reshape(B * N, *camera_images.shape[2:])  # (B*N, 3, H, W)
+      cam_features = self.camera_cnn(cam_flat)  # (B*N, camera_features_dim)
+      cam_features = cam_features.reshape(B, N * cam_features.shape[-1])  # (B, N*camera_features_dim)
+      parts.append(cam_features)
+
+    x = torch.cat(parts, dim=1)
     x = self.linear(x)
     return x
 
@@ -335,7 +393,12 @@ class PPOPolicy(nn.Module):
     bev_semantics = observations['bev_semantics'].to(dtype=torch.float32)  # Cast from uint8 to float32 for CNN
     measurements = observations['measurements']
     birdview = bev_semantics / 255.0
-    features = self.features_extractor(birdview, measurements)
+    camera_images = None
+    if self.config.use_camera and 'camera_images' in observations:
+      # (B, N, H, W, 3) uint8 -> (B, N, 3, H, W) float32 [0, 1]
+      cam = observations['camera_images'].to(dtype=torch.float32) / 255.0
+      camera_images = cam.permute(0, 1, 4, 2, 3)
+    features = self.features_extractor(birdview, measurements, camera_images=camera_images)
     return features
 
   def get_action_dist_from_features(self, features: torch.Tensor, actions=None):
