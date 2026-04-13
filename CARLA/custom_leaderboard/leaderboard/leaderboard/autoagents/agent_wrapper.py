@@ -18,7 +18,13 @@ import carla
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 
-from leaderboard.envs.sensor_interface import CallBack, OpenDriveMapReader, SpeedometerReader, SensorConfigurationInvalid
+from leaderboard.envs.sensor_interface import (
+    CallBack,
+    OpenDriveMapReader,
+    SpeedometerReader,
+    SensorConfigurationInvalid,
+    SensorReceivedNoData,
+)
 from leaderboard.autoagents.autonomous_agent import Track
 from leaderboard.autoagents.ros_base_agent import ROSBaseAgent
 
@@ -279,6 +285,19 @@ class AgentWrapper(object):
             # Some sensors miss sending data during the first ticks, so tick several times and remove the data
             for _ in range(10):
                 world.tick()
+
+            # Wait until every registered sensor has produced at least one frame.
+            warmup_timeout_s = 30.0
+            warmup_deadline = time.time() + warmup_timeout_s
+            while time.time() < warmup_deadline:
+                if self._agent.sensor_interface.all_sensors_ready():
+                    break
+                world.tick()
+            else:
+                missing_sensors = self._agent.sensor_interface.get_missing_ready_sensors()
+                raise SensorReceivedNoData(
+                    "Timed out waiting for the first frame from sensors: {}".format(", ".join(missing_sensors))
+                )
 
     def cleanup(self):
         """

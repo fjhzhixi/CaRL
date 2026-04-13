@@ -48,6 +48,53 @@ def none_or_str(value):
   return value
 
 
+def filter_launcher_unknown_args(argv):
+  """Hide train_parallel.py launcher args that are intentionally forwarded to dd_ppo.py."""
+  launcher_flags_single_value = {
+      '--train_cpp',
+      '--ml_cloud',
+      '--num_nodes',
+      '--node_id',
+      '--rdzv_port',
+      '--git_root',
+      '--carla_root',
+      '--start_port',
+      '--num_envs_per_gpu',
+      '--num_envs_per_node',
+      '--routes_folder',
+      '--route_repetitions',
+      '--team_code_folder',
+      '--collect_device',
+      '--train_device',
+      '--PYTORCH_KERNEL_CACHE_PATH',
+      '--ppo_cpp_install_path',
+      '--cpp_singularity_file_path',
+      '--cpp_system_lib_path_1',
+      '--cpp_system_lib_path_2',
+      '--carla_singularity',
+      '--carla_singularity_path',
+  }
+  launcher_flags_multi_value = {
+      '--train_towns',
+  }
+
+  filtered = []
+  idx = 0
+  while idx < len(argv):
+    token = argv[idx]
+    if token in launcher_flags_single_value:
+      idx += 2
+      continue
+    if token in launcher_flags_multi_value:
+      idx += 1
+      while idx < len(argv) and not argv[idx].startswith('--'):
+        idx += 1
+      continue
+    filtered.append(token)
+    idx += 1
+  return filtered
+
+
 def save(model, optimizer, config, folder, model_file, optimizer_file):
   model_file = os.path.join(folder, model_file)
   torch.save(model.module.state_dict(), model_file)
@@ -591,7 +638,9 @@ def parse_args(config):
                       help='Camera encoder type. Options: simple_cnn')
 
   args, unknown = parser.parse_known_args()
-  print('Unkown Arguments', unknown)
+  unknown = filter_launcher_unknown_args(unknown)
+  if unknown:
+    print('Unkown Arguments', unknown)
   # fmt: on
   return args
 

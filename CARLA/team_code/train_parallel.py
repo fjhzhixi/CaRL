@@ -11,10 +11,43 @@ import argparse
 import os
 import re
 import socket
+import jsonpickle
+import jsonpickle.ext.numpy as jsonpickle_numpy
+
+from rl_config import GlobalConfig
+
+jsonpickle_numpy.register_handlers()
+jsonpickle.set_encoder_options('json', sort_keys=True, indent=4)
 
 
 def strtobool(v):
   return str(v).lower() in ('yes', 'y', 'true', 't', '1', 'True')
+
+
+def get_unknown_arg_value(argv, flag, default=None):
+  for idx, token in enumerate(argv):
+    if token == flag:
+      if idx + 1 < len(argv) and not argv[idx + 1].startswith('--'):
+        return argv[idx + 1]
+      return True
+  return default
+
+
+def write_bootstrap_config(exp_folder, unknown):
+  """Write a minimal config.json so env_agent.sensors() sees camera settings before ZMQ config sync."""
+  config = GlobalConfig()
+  camera_fields = {
+      'use_camera': bool(strtobool(get_unknown_arg_value(unknown, '--use_camera', config.use_camera))),
+      'camera_mode': get_unknown_arg_value(unknown, '--camera_mode', config.camera_mode),
+      'camera_width': int(get_unknown_arg_value(unknown, '--camera_width', config.camera_width)),
+      'camera_height': int(get_unknown_arg_value(unknown, '--camera_height', config.camera_height)),
+      'camera_fov': int(get_unknown_arg_value(unknown, '--camera_fov', config.camera_fov)),
+      'camera_features_dim': int(get_unknown_arg_value(unknown, '--camera_features_dim', config.camera_features_dim)),
+      'camera_encoder': get_unknown_arg_value(unknown, '--camera_encoder', config.camera_encoder),
+  }
+  config.initialize(**camera_fields)
+  with open(os.path.join(exp_folder, 'config.json'), 'wt', encoding='utf-8') as f:
+    f.write(jsonpickle.encode(config))
 
 
 def next_free_port(port=1024, max_port=65535):
@@ -179,6 +212,7 @@ if __name__ == '__main__':
                         help='/path/to/custom_carla_container.sif')
 
     args, unknown = parser.parse_known_args()
+    use_camera = bool(strtobool(get_unknown_arg_value(unknown, '--use_camera', False)))
     if 'CONDA_PREFIX' in os.environ:
       lib_prefix = os.environ['CONDA_PREFIX']       # conda 环境
     elif sys.prefix != sys.base_prefix:
@@ -189,6 +223,9 @@ if __name__ == '__main__':
     git_root = args.git_root
     raw_logdir = os.path.join(git_root, 'results')
     logdir = os.path.join(raw_logdir, args.exp_name)
+    os.makedirs(logdir, exist_ok=True)
+    os.makedirs(os.path.join(raw_logdir, 'logs'), exist_ok=True)
+    write_bootstrap_config(logdir, unknown)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
     route_start_id = args.num_envs_per_gpu * args.node_id
     route_end_id = 32  # TODO find suitable solution for multinode. route_start_id + args.num_envs_per_gpu
@@ -303,30 +340,40 @@ if __name__ == '__main__':
       carla_processes = []
       leaderboard_processes = []
 
-      num_threads_per_server = 2
+      num_threads_per_server = 4 if use_camera else 2
+
+      carla_rendering_flag = '' if use_camera else '-nullrhi '
+      carla_threading_flag = '' if use_camera else '-nothreading'
+      leaderboard_no_rendering_mode = 'False' if use_camera else 'True'
+      local_server_wait_s = 5.0 if use_camera else 0.02
+      local_client_wait_s = 0.5 if use_camera else 0.02
+      cloud_server_wait_s = 7.0 if use_camera else 7.0
+      cloud_client_wait_s = 0.5 if use_camera else 0.2
+      if use_camera:
+        print('Camera observations enabled: starting CARLA without -nullrhi and without -nothreading')
 
       if args.ml_cloud:
         for i in range(args.num_envs_per_node):
           print(f'Start server {i}')
-          # The -nullrhi option prevents CARLA from using the GPU at all (no rendering will happen).
-          # set graphicsadapter to {args.gpu_ids[i]} if actually using the gpu
+          # The -nullrhi option prevents CARLA from using the GPU at all.
+          # Camera observations require rendering, so we disable -nullrhi when use_camera=True.
           if args.carla_singularity:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
                   f'singularity exec --nv --bind {args.carla_root}:{args.carla_root},{raw_logdir}:{raw_logdir} {args.carla_singularity_path} '
-                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
+                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',
+                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           else:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
                   f'{ld_lib_prefix}'
-                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
+                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',
+                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
-          time.sleep(7)
+          time.sleep(cloud_server_wait_s)
 
         for i in range(args.num_envs_per_node):
           print(f'Start client {i}')
@@ -335,40 +382,40 @@ if __name__ == '__main__':
                 f'{ld_lib_prefix}'
                   f'bash start_leaderboard.sh {git_root} {route_files[i]} {logdir} '
                   f'{i} {client_ports[i]} {traffic_manager_ports[i]} {rl_ports[i]} {args.seed} {skip_next_route} '
-                  f'{args.route_repetitions}',
+                  f'{args.route_repetitions} {leaderboard_no_rendering_mode}',
                   shell=True, stdout=client_outs[i], stderr=client_errs[i]))
-          time.sleep(0.2)
+          time.sleep(cloud_client_wait_s)
       else:
         for i in range(args.num_envs_per_node):
           print(f'Start server {i}')
-          # The -nullrhi option prevents CARLA from using the GPU at all (no rendering will happen).
-          # set graphicsadapter to {args.gpu_ids[i]} if actually using the gpu
+          # The -nullrhi option prevents CARLA from using the GPU at all.
+          # Camera observations require rendering, so we disable -nullrhi when use_camera=True.
 
           if args.carla_singularity:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
                   f'singularity exec --nv --bind {args.carla_root}:{args.carla_root},{raw_logdir}:{raw_logdir} {args.carla_singularity_path} '
-                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
+                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',
+                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           else:
             carla_processes.append(
                 subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
                   f'{ld_lib_prefix}'
-                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound -nullrhi '
+                    f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} -nothreading',
+                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
-          time.sleep(0.02)
+          time.sleep(local_server_wait_s)
           print(f'Start client {i}')
           leaderboard_processes.append(
               subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
                   f'bash start_leaderboard.sh {git_root} {route_files[i]} {logdir} '
                   f'{i} {client_ports[i]} {traffic_manager_ports[i]} {rl_ports[i]} {args.seed} {skip_next_route} '
-                  f'{args.route_repetitions}',
+                  f'{args.route_repetitions} {leaderboard_no_rendering_mode}',
                   shell=True, stdout=client_outs[i], stderr=client_errs[i]))
-          time.sleep(0.02)
+          time.sleep(local_client_wait_s)
 
       skip_next_route = 'False'  # After one route (potentially) was skipped we reset the variable
 

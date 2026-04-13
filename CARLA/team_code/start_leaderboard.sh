@@ -10,6 +10,7 @@ export rl_port=$7
 export random_seed=$8
 export skip_next_route=$9
 export repetitions=${10}
+export no_rendering_mode=${11:-True}
 
 export NUMEXPR_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -17,4 +18,4 @@ export VECLIB_MAXIMUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 
-python -u ${git_root}/custom_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py --routes ${route_file} --agent ${git_root}/team_code/env_agent.py --checkpoint ${logdir}/route_${index}.json --track MAP --port ${client_port} --traffic-manager-port ${tm_port} --agent-config ${logdir} --gym_port ${rl_port} --traffic-manager-seed ${random_seed} --skip_next_route ${skip_next_route} --frame_rate 10 --resume 1 --no_rendering_mode True --runtime_timeout 240.0 --timeout 800.0  --repetitions ${repetitions}
+python -u ${git_root}/custom_leaderboard/leaderboard/leaderboard/leaderboard_evaluator.py --routes ${route_file} --agent ${git_root}/team_code/env_agent.py --checkpoint ${logdir}/route_${index}.json --track MAP --port ${client_port} --traffic-manager-port ${tm_port} --agent-config ${logdir} --gym_port ${rl_port} --traffic-manager-seed ${random_seed} --skip_next_route ${skip_next_route} --frame_rate 10 --resume 1 --no_rendering_mode ${no_rendering_mode} --runtime_timeout 240.0 --timeout 800.0  --repetitions ${repetitions}

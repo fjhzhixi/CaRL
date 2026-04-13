@@ -200,6 +200,7 @@ class SensorInterface(object):
         self._sensors_objects = {}
         self._data_buffers = Queue()
         self._queue_timeout = 10
+        self._latest_frames = {}
 
         # Only sensor that doesn't get the data on tick, needs special treatment
         self._opendrive_tag = None
@@ -209,6 +210,7 @@ class SensorInterface(object):
             raise SensorConfigurationInvalid("Duplicated sensor tag [{}]".format(tag))
 
         self._sensors_objects[tag] = sensor
+        self._latest_frames[tag] = None
 
         if sensor_type == 'sensor.opendrive_map': 
             self._opendrive_tag = tag
@@ -217,13 +219,27 @@ class SensorInterface(object):
         """Reset the sensor registry so sensors can be re-registered on a new route."""
         self._sensors_objects = {}
         self._data_buffers = Queue()
+        self._latest_frames = {}
         self._opendrive_tag = None
 
     def update_sensor(self, tag, data, frame):
         if tag not in self._sensors_objects:
             raise SensorConfigurationInvalid("The sensor with tag [{}] has not been created!".format(tag))
 
+        self._latest_frames[tag] = frame
         self._data_buffers.put((tag, frame, data))
+
+    def get_missing_ready_sensors(self):
+        missing = []
+        for tag in self._sensors_objects:
+            if tag == self._opendrive_tag:
+                continue
+            if self._latest_frames.get(tag) is None:
+                missing.append(tag)
+        return missing
+
+    def all_sensors_ready(self):
+        return len(self.get_missing_ready_sensors()) == 0
 
     def get_data(self, frame):
         """Read the queue to get the sensors data"""
