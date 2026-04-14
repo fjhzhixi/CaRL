@@ -126,6 +126,19 @@ def print_effective_config(summary):
   print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+def resolve_logdir(git_root, unknown, config_overrides):
+  cli_value = get_unknown_arg_value(unknown, '--logdir', None)
+  logdir_value = cli_value if cli_value is not None else config_overrides.get('logdir', None)
+
+  if logdir_value is None:
+    return os.path.join(git_root, 'results')
+
+  logdir_value = os.path.expanduser(str(logdir_value))
+  if os.path.isabs(logdir_value):
+    return os.path.abspath(logdir_value)
+  return os.path.abspath(os.path.join(git_root, logdir_value))
+
+
 def next_free_port(port=1024, max_port=65535):
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   while port <= max_port:
@@ -312,8 +325,8 @@ if __name__ == '__main__':
     else:
       lib_prefix = None                             # 系统 Python，不注入
     ld_lib_prefix = f'LD_LIBRARY_PATH={lib_prefix}/lib:$LD_LIBRARY_PATH ' if lib_prefix else ''
-    git_root = args.git_root
-    raw_logdir = os.path.join(git_root, 'results')
+    git_root = os.path.abspath(os.path.expanduser(args.git_root))
+    raw_logdir = resolve_logdir(git_root, unknown, config_overrides)
     logdir = os.path.join(raw_logdir, args.exp_name)
     os.makedirs(logdir, exist_ok=True)
     os.makedirs(os.path.join(raw_logdir, 'logs'), exist_ok=True)
