@@ -11,6 +11,7 @@ import argparse
 import os
 import re
 import socket
+import json
 import jsonpickle
 import jsonpickle.ext.numpy as jsonpickle_numpy
 
@@ -33,21 +34,96 @@ def get_unknown_arg_value(argv, flag, default=None):
   return default
 
 
-def write_bootstrap_config(exp_folder, unknown):
+def cli_flag_present(argv, flag):
+  return flag in argv
+
+
+def strip_flag_with_value(argv, flag):
+  stripped = []
+  idx = 0
+  while idx < len(argv):
+    token = argv[idx]
+    if token == flag:
+      idx += 1
+      if idx < len(argv) and not argv[idx].startswith('--'):
+        idx += 1
+      continue
+    stripped.append(token)
+    idx += 1
+  return stripped
+
+
+def load_grouped_config(config_file, multi_gpu_mode):
+  if config_file is None:
+    return {}
+
+  with open(config_file, 'rt', encoding='utf-8') as f:
+    config = json.load(f)
+
+  flat = {}
+  for section_name, section_values in config.items():
+    if section_name == 'distributed':
+      continue
+    if isinstance(section_values, dict):
+      flat.update(section_values)
+
+  distributed = config.get('distributed', {})
+  if multi_gpu_mode and 'multi_gpu_default_routes_folder' in distributed:
+    flat['routes_folder'] = distributed['multi_gpu_default_routes_folder']
+
+  return flat
+
+
+def build_cli_args_from_config(config_values, explicit_cli_flags):
+  cli_args = []
+  for key, value in config_values.items():
+    flag = f'--{key}'
+    if flag in explicit_cli_flags:
+      continue
+    if value is None:
+      continue
+
+    cli_args.append(flag)
+    if isinstance(value, bool):
+      cli_args.append('True' if value else 'False')
+    elif isinstance(value, (list, tuple)):
+      if len(value) == 0:
+        cli_args.pop()
+        continue
+      cli_args.extend(str(v) for v in value)
+    else:
+      cli_args.append(str(value))
+
+  return cli_args
+
+
+def write_bootstrap_config(exp_folder, unknown, config_overrides):
   """Write a minimal config.json so env_agent.sensors() sees camera settings before ZMQ config sync."""
   config = GlobalConfig()
+
+  def get_effective_value(flag, default):
+    cli_value = get_unknown_arg_value(unknown, flag, None)
+    if cli_value is not None:
+      return cli_value
+    return config_overrides.get(flag[2:], default)
+
   camera_fields = {
-      'use_camera': bool(strtobool(get_unknown_arg_value(unknown, '--use_camera', config.use_camera))),
-      'camera_mode': get_unknown_arg_value(unknown, '--camera_mode', config.camera_mode),
-      'camera_width': int(get_unknown_arg_value(unknown, '--camera_width', config.camera_width)),
-      'camera_height': int(get_unknown_arg_value(unknown, '--camera_height', config.camera_height)),
-      'camera_fov': int(get_unknown_arg_value(unknown, '--camera_fov', config.camera_fov)),
-      'camera_features_dim': int(get_unknown_arg_value(unknown, '--camera_features_dim', config.camera_features_dim)),
-      'camera_encoder': get_unknown_arg_value(unknown, '--camera_encoder', config.camera_encoder),
+      'use_camera': bool(strtobool(get_effective_value('--use_camera', config.use_camera))),
+      'camera_mode': get_effective_value('--camera_mode', config.camera_mode),
+      'camera_width': int(get_effective_value('--camera_width', config.camera_width)),
+      'camera_height': int(get_effective_value('--camera_height', config.camera_height)),
+      'camera_fov': int(get_effective_value('--camera_fov', config.camera_fov)),
+      'camera_features_dim': int(get_effective_value('--camera_features_dim', config.camera_features_dim)),
+      'camera_encoder': get_effective_value('--camera_encoder', config.camera_encoder),
   }
   config.initialize(**camera_fields)
   with open(os.path.join(exp_folder, 'config.json'), 'wt', encoding='utf-8') as f:
     f.write(jsonpickle.encode(config))
+
+
+def print_effective_config(summary):
+  print('Effective training config:')
+  print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 def next_free_port(port=1024, max_port=65535):
@@ -113,6 +189,10 @@ if __name__ == '__main__':
     training = True
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument('--exp_name', type=str, default='PPO_000', help='the name of this experiment')
+    parser.add_argument('--config_file',
+                        type=str,
+                        default=None,
+                        help='Path to a grouped JSON config file. CLI arguments override config values.')
     parser.add_argument('--git_root',
                         type=str,
                         default=r'/home/jaeger/ordnung/internal/CaRL/CARLA',
@@ -211,8 +291,20 @@ if __name__ == '__main__':
                         default='/mnt/lustre/work/geiger/bjaeger25/ad_planning/2_carla/team_code_roach/custom_carla_container.sif',
                         help='/path/to/custom_carla_container.sif')
 
+    initial_args, initial_unknown = parser.parse_known_args()
+    config_overrides = load_grouped_config(initial_args.config_file, initial_args.num_nodes > 1)
+
+    known_dests = {action.dest for action in parser._actions}
+    parser.set_defaults(**{k: v for k, v in config_overrides.items() if k in known_dests})
+
     args, unknown = parser.parse_known_args()
-    use_camera = bool(strtobool(get_unknown_arg_value(unknown, '--use_camera', False)))
+
+    if not cli_flag_present(sys.argv[1:], '--num_envs_per_node') and not args.use_traj_sync_ppo:
+      args.num_envs_per_node = len(args.gpu_ids) * args.num_envs_per_gpu
+
+    explicit_cli_flags = {token for token in sys.argv[1:] if token.startswith('--')}
+    use_camera = bool(strtobool(get_unknown_arg_value(
+        unknown, '--use_camera', config_overrides.get('use_camera', False))))
     if 'CONDA_PREFIX' in os.environ:
       lib_prefix = os.environ['CONDA_PREFIX']       # conda 环境
     elif sys.prefix != sys.base_prefix:
@@ -225,7 +317,7 @@ if __name__ == '__main__':
     logdir = os.path.join(raw_logdir, args.exp_name)
     os.makedirs(logdir, exist_ok=True)
     os.makedirs(os.path.join(raw_logdir, 'logs'), exist_ok=True)
-    write_bootstrap_config(logdir, unknown)
+    write_bootstrap_config(logdir, unknown, config_overrides)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
     route_start_id = args.num_envs_per_gpu * args.node_id
     route_end_id = 32  # TODO find suitable solution for multinode. route_start_id + args.num_envs_per_gpu
@@ -275,6 +367,12 @@ if __name__ == '__main__':
             for i in range(route_start_id, route_end_id)
         ],
     }
+    if not cli_flag_present(sys.argv[1:], '--train_towns') and len(args.train_towns) != args.num_envs_per_node:
+      available_towns = list(id_to_townfile_mapping.keys())
+      args.train_towns = tuple(
+          available_towns[(args.node_id * args.num_envs_per_node + i) % len(available_towns)]
+          for i in range(args.num_envs_per_node)
+      )
     route_files = []
     for town_id in args.train_towns:
       route_files.append(id_to_townfile_mapping[town_id].pop(0))
@@ -419,7 +517,26 @@ if __name__ == '__main__':
 
       skip_next_route = 'False'  # After one route (potentially) was skipped we reset the variable
 
-      cmdline = ' '.join(map(shlex.quote, sys.argv[1:]))
+      config_cli_values = dict(config_overrides)
+      rollout_steps_per_env = config_cli_values.pop('rollout_steps_per_env', None)
+      minibatches_per_update = config_cli_values.pop('minibatches_per_update', None)
+      config_cli_values.pop('multi_gpu_default_routes_folder', None)
+
+      total_envs_global = args.num_nodes * args.num_envs_per_node
+      if '--total_batch_size' not in explicit_cli_flags and rollout_steps_per_env is not None:
+        config_cli_values['total_batch_size'] = total_envs_global * int(rollout_steps_per_env)
+      if ('--total_minibatch_size' not in explicit_cli_flags and
+          minibatches_per_update is not None and
+          'total_batch_size' in config_cli_values):
+        total_batch_size = int(config_cli_values['total_batch_size'])
+        minibatches_per_update = int(minibatches_per_update)
+        if minibatches_per_update <= 0 or total_batch_size % minibatches_per_update != 0:
+          raise ValueError('Configured rollout_steps_per_env and minibatches_per_update yield an invalid minibatch size')
+        config_cli_values['total_minibatch_size'] = total_batch_size // minibatches_per_update
+
+      base_cmdline_args = strip_flag_with_value(sys.argv[1:], '--config_file')
+      config_cmdline_args = build_cli_args_from_config(config_cli_values, explicit_cli_flags)
+      cmdline = ' '.join(map(shlex.quote, base_cmdline_args + config_cmdline_args))
       str_ports = ' '.join(str(x) for x in rl_ports)
       cpp_str_ports = ' '.join('--ports ' + str(x) for x in rl_ports)
 
@@ -445,6 +562,65 @@ if __name__ == '__main__':
       else:
         num_processes = args.num_envs_per_node // args.num_envs_per_gpu
         num_envs_per_proc = args.num_envs_per_gpu
+
+      def get_effective_forwarded_value(flag, default=None):
+        cli_value = get_unknown_arg_value(unknown, flag, None)
+        if cli_value is not None:
+          return cli_value
+        return config_cli_values.get(flag[2:], default)
+
+      effective_summary = {
+          'runtime': {
+              'config_file': args.config_file,
+              'exp_name': args.exp_name,
+              'git_root': git_root,
+              'carla_root': args.carla_root,
+              'logdir': logdir,
+              'seed': args.seed,
+              'debug': args.debug,
+              'resume_from': load_file,
+          },
+          'distributed': {
+              'gpu_ids': list(args.gpu_ids),
+              'num_nodes': args.num_nodes,
+              'node_id': args.node_id,
+              'rdzv_addr': args.rdzv_addr,
+              'rdzv_port': args.rdzv_port,
+              'num_processes': num_processes,
+          },
+          'parallel': {
+              'num_envs_per_gpu': args.num_envs_per_gpu,
+              'num_envs_per_node': args.num_envs_per_node,
+              'num_envs_per_proc': num_envs_per_proc,
+              'total_envs_global': total_envs_global,
+              'start_port': args.start_port,
+              'train_towns': list(args.train_towns),
+              'routes_folder': args.routes_folder,
+              'route_repetitions': args.route_repetitions,
+              'rollout_steps_per_env': get_effective_forwarded_value('--rollout_steps_per_env'),
+              'minibatches_per_update': get_effective_forwarded_value('--minibatches_per_update'),
+          },
+          'ppo': {
+              'total_timesteps': get_effective_forwarded_value('--total_timesteps'),
+              'total_batch_size': get_effective_forwarded_value('--total_batch_size'),
+              'total_minibatch_size': get_effective_forwarded_value('--total_minibatch_size'),
+              'update_epochs': get_effective_forwarded_value('--update_epochs'),
+              'reward_type': get_effective_forwarded_value('--reward_type'),
+              'use_dd_ppo_preempt': get_effective_forwarded_value('--use_dd_ppo_preempt'),
+          },
+          'camera': {
+              'use_camera': use_camera,
+              'camera_mode': get_effective_forwarded_value('--camera_mode'),
+              'camera_width': get_effective_forwarded_value('--camera_width'),
+              'camera_height': get_effective_forwarded_value('--camera_height'),
+              'frame_rate': get_effective_forwarded_value('--frame_rate'),
+              'leaderboard_no_rendering_mode': leaderboard_no_rendering_mode,
+              'carla_rendering_enabled': use_camera,
+              'carla_threading_enabled': use_camera,
+              'num_threads_per_server': num_threads_per_server,
+          },
+      }
+      print_effective_config(effective_summary)
 
       if args.debug:
         train_out = open(f"{raw_logdir}/logs/train_out.txt", 'w', encoding='utf-8')
