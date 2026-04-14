@@ -103,6 +103,7 @@
     "pixels_per_meter": 2,
     "route_width": 6,
     "num_route_points_rendered": 150,
+    "use_bev_input": true,
     "obs_num_measurements": 8,
     "bev_semantics_width": 256,
     "bev_semantics_height": 256,

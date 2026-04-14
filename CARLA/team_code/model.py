@@ -95,89 +95,94 @@ class XtMaCNN(nn.Module):
     super().__init__()
     self.features_dim = config.features_dim
     self.config = config
+    self.use_bev_input = getattr(config, 'use_bev_input', True)
 
     n_input_channels = observation_space['bev_semantics'].shape[0]
 
     if self.config.use_positional_encoding:
       n_input_channels += 2
 
-    if self.config.image_encoder == 'roach':
-      self.cnn = nn.Sequential(  # in [B, 15, 192, 192]
-          nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
-          nn.ReLU(),
-          nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
-          nn.ReLU(),
-          nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
-          nn.ReLU(),
-          nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
-          nn.ReLU(),
-          nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
-          nn.ReLU(),
-          nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-          nn.ReLU(),
-      )
-    elif self.config.image_encoder == 'roach_ln':  # input is expected to be [B, C, 192, 192]
-      self.cnn = nn.Sequential(
-          nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
-          nn.LayerNorm((8, 94, 94)),
-          nn.ReLU(),
-          nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
-          nn.LayerNorm((16, 45, 45)),
-          nn.ReLU(),
-          nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
-          nn.LayerNorm((32, 21, 21)),
-          nn.ReLU(),
-          nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
-          nn.LayerNorm((64, 10, 10)),
-          nn.ReLU(),
-          nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
-          nn.LayerNorm((128, 4, 4)),
-          nn.ReLU(),
-          nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-          nn.LayerNorm((256, 2, 2)),
-          nn.ReLU(),
-      )
-    elif self.config.image_encoder == 'roach_ln2':  # input is expected to be [B, C, 256, 256]
-      self.cnn = nn.Sequential(
-          nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 126, 126]
-          nn.LayerNorm((8, 126, 126)),
-          nn.ReLU(),
-          nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 61, 61]
-          nn.LayerNorm((16, 61, 61)),
-          nn.ReLU(),
-          nn.Conv2d(16, 24, kernel_size=5, stride=2),  # -> [B, 16, 29, 29]
-          nn.LayerNorm((24, 29, 29)),
-          nn.ReLU(),
-          nn.Conv2d(24, 32, kernel_size=5, stride=2),  # -> [B, 32, 13, 13]
-          nn.LayerNorm((32, 13, 13)),
-          nn.ReLU(),
-          nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 6, 6]
-          nn.LayerNorm((64, 6, 6)),
-          nn.ReLU(),
-          nn.Conv2d(64, 128, kernel_size=3, stride=1),  # -> [B, 128, 4, 4]
-          nn.LayerNorm((128, 4, 4)),
-          nn.ReLU(),
-          nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-          nn.LayerNorm((256, 2, 2)),
-          nn.ReLU(),
-      )
-    else:
-      self.cnn = CustomCnn(config, n_input_channels)
+    self.cnn = None
+    self.cnn_out_shape = None
+    self.n_flatten = 0
+    if self.use_bev_input:
+      if self.config.image_encoder == 'roach':
+        self.cnn = nn.Sequential(  # in [B, 15, 192, 192]
+            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
+            nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
+            nn.ReLU(),
+        )
+      elif self.config.image_encoder == 'roach_ln':  # input is expected to be [B, C, 192, 192]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
+            nn.LayerNorm((8, 94, 94)),
+            nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
+            nn.LayerNorm((16, 45, 45)),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
+            nn.LayerNorm((32, 21, 21)),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
+            nn.LayerNorm((64, 10, 10)),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
+            nn.LayerNorm((128, 4, 4)),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
+            nn.LayerNorm((256, 2, 2)),
+            nn.ReLU(),
+        )
+      elif self.config.image_encoder == 'roach_ln2':  # input is expected to be [B, C, 256, 256]
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 126, 126]
+            nn.LayerNorm((8, 126, 126)),
+            nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 61, 61]
+            nn.LayerNorm((16, 61, 61)),
+            nn.ReLU(),
+            nn.Conv2d(16, 24, kernel_size=5, stride=2),  # -> [B, 16, 29, 29]
+            nn.LayerNorm((24, 29, 29)),
+            nn.ReLU(),
+            nn.Conv2d(24, 32, kernel_size=5, stride=2),  # -> [B, 32, 13, 13]
+            nn.LayerNorm((32, 13, 13)),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 6, 6]
+            nn.LayerNorm((64, 6, 6)),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1),  # -> [B, 128, 4, 4]
+            nn.LayerNorm((128, 4, 4)),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
+            nn.LayerNorm((256, 2, 2)),
+            nn.ReLU(),
+        )
+      else:
+        self.cnn = CustomCnn(config, n_input_channels)
 
-    # Compute shape by doing one forward pass
-    with torch.no_grad():
-      sample_bev = torch.as_tensor(observation_space['bev_semantics'].sample()[None]).float()
-      if self.config.use_positional_encoding:  # CoordConv layer
-        x = torch.linspace(-1, 1, self.config.bev_semantics_height)
-        y = torch.linspace(-1, 1, self.config.bev_semantics_width)
-        y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
-        y_grid = y_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
-        x_grid = x_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
+      # Compute shape by doing one forward pass
+      with torch.no_grad():
+        sample_bev = torch.as_tensor(observation_space['bev_semantics'].sample()[None]).float()
+        if self.config.use_positional_encoding:  # CoordConv layer
+          x = torch.linspace(-1, 1, self.config.bev_semantics_height)
+          y = torch.linspace(-1, 1, self.config.bev_semantics_width)
+          y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
+          y_grid = y_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
+          x_grid = x_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
 
-        sample_bev = torch.concatenate((sample_bev, y_grid, x_grid), dim=1)
+          sample_bev = torch.concatenate((sample_bev, y_grid, x_grid), dim=1)
 
-      self.cnn_out_shape = self.cnn(sample_bev).shape
-      self.n_flatten = math.prod(self.cnn_out_shape[1:])
+        self.cnn_out_shape = self.cnn(sample_bev).shape
+        self.n_flatten = math.prod(self.cnn_out_shape[1:])
 
     self.states_neurons = states_neurons[-1]
 
@@ -206,7 +211,7 @@ class XtMaCNN(nn.Module):
       self.state_linear.append(nn.ReLU())
     self.state_linear = nn.Sequential(*self.state_linear)
 
-    if self.config.image_encoder in ('roach', 'roach_ln', 'roach_ln2'):
+    if self.use_bev_input and self.config.image_encoder in ('roach', 'roach_ln', 'roach_ln2'):
       self.apply(self._weights_init)
 
   @staticmethod
@@ -216,22 +221,25 @@ class XtMaCNN(nn.Module):
       nn.init.constant_(m.bias, 0.1)
 
   def forward(self, bev_semantics, measurements, camera_images=None):
-    if self.config.use_positional_encoding:  # CoordConv layer
-      x = torch.linspace(-1, 1, self.config.bev_semantics_height)
-      y = torch.linspace(-1, 1, self.config.bev_semantics_width)
-      y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
-      y_grid = y_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
-          bev_semantics.shape[0], -1, -1, -1)
-      x_grid = x_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
-          bev_semantics.shape[0], -1, -1, -1)
-
-      bev_semantics = torch.concatenate((bev_semantics, y_grid, x_grid), dim=1)
-
-    x = self.cnn(bev_semantics)
-    x = torch.flatten(x, start_dim=1)
     latent_state = self.state_linear(measurements)
 
-    parts = [x, latent_state]
+    parts = [latent_state]
+    if self.use_bev_input:
+      if self.config.use_positional_encoding:  # CoordConv layer
+        x = torch.linspace(-1, 1, self.config.bev_semantics_height)
+        y = torch.linspace(-1, 1, self.config.bev_semantics_width)
+        y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
+        y_grid = y_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
+            bev_semantics.shape[0], -1, -1, -1)
+        x_grid = x_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
+            bev_semantics.shape[0], -1, -1, -1)
+
+        bev_semantics = torch.concatenate((bev_semantics, y_grid, x_grid), dim=1)
+
+      x = self.cnn(bev_semantics)
+      x = torch.flatten(x, start_dim=1)
+      parts.insert(0, x)
+
     if self.use_camera and camera_images is not None:
       # camera_images: (B, N, 3, H, W) float32 in [0, 1]
       B, N = camera_images.shape[:2]
@@ -688,4 +696,3 @@ class PPOPolicy(nn.Module):
 
     else:
       return np.concatenate((obs_rendered_upscaled, measurement_plot), axis=1)
-

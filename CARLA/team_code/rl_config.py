@@ -154,6 +154,7 @@ class GlobalConfig:
     # Action and observation space
     self.obs_num_measurements = 8  # Number of scalar measurements in observation.
     self.obs_num_channels = 15  # Number of channels in the bev observation.
+    self.use_bev_input = True  # Whether the model consumes bev_semantics as an input branch.
 
     ####### Camera sensor parameters ############
     self.use_camera = False  # Whether to attach and use RGB camera sensors

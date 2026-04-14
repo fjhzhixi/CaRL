@@ -546,6 +546,12 @@ def parse_args(config):
                       nargs='?',
                       const=True,
                       help='Whether to add positional encoding to the image')
+  parser.add_argument('--use_bev_input',
+                      type=lambda x: bool(strtobool(x)),
+                      default=config.use_bev_input,
+                      nargs='?',
+                      const=True,
+                      help='Whether the model consumes bev_semantics in the encoder. The env still returns it.')
   parser.add_argument('--use_ttc',
                       type=lambda x: bool(strtobool(x)),
                       default=config.use_ttc,
