@@ -16,12 +16,11 @@ if [[ -z "${CARLA_ROOT}" ]]; then
   exit 1
 fi
 
-for required_var in MLP_WORKER_NUM MLP_WORKER_GPU MLP_ROLE_INDEX MLP_WORKER_0_HOST MLP_WORKER_0_PORT; do
-  if [[ -z "${!required_var:-}" ]]; then
-    echo "${required_var} is not set."
-    exit 1
-  fi
-done
+MLP_WORKER_NUM="${MLP_WORKER_NUM:-1}"
+MLP_WORKER_GPU="${MLP_WORKER_GPU:-1}"
+MLP_ROLE_INDEX="${MLP_ROLE_INDEX:-0}"
+MLP_WORKER_0_HOST="${MLP_WORKER_0_HOST:-127.0.0.1}"
+MLP_WORKER_0_PORT="${MLP_WORKER_0_PORT:-29500}"
 
 TRAIN_CONFIG="${TRAIN_CONFIG:-${SCRIPT_DIR}/configs/camera_train_default.json}"
 if [[ ! -f "${TRAIN_CONFIG}" ]]; then

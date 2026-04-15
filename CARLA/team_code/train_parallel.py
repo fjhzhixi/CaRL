@@ -121,6 +121,15 @@ def write_bootstrap_config(exp_folder, unknown, config_overrides):
     f.write(jsonpickle.encode(config))
 
 
+def get_carla_gpu_assignments(num_envs_per_node, gpu_ids, num_envs_per_gpu):
+  if num_envs_per_gpu <= 0:
+    raise ValueError('--num_envs_per_gpu must be positive.')
+  if len(gpu_ids) == 0:
+    raise ValueError('--gpu_ids must contain at least one GPU id.')
+
+  return [gpu_ids[(env_idx // num_envs_per_gpu) % len(gpu_ids)] for env_idx in range(num_envs_per_node)]
+
+
 def print_effective_config(summary):
   print('Effective training config:')
   print(json.dumps(summary, indent=2, sort_keys=True))
@@ -460,12 +469,15 @@ if __name__ == '__main__':
       local_client_wait_s = 0.5 if use_camera else 0.02
       cloud_server_wait_s = 7.0 if use_camera else 7.0
       cloud_client_wait_s = 0.5 if use_camera else 0.2
+      carla_gpu_assignments = get_carla_gpu_assignments(args.num_envs_per_node, args.gpu_ids, args.num_envs_per_gpu)
       if use_camera:
         print('Camera observations enabled: starting CARLA without -nullrhi and without -nothreading')
+      print(f'CARLA_GPU_ASSIGNMENTS={carla_gpu_assignments}')
 
       if args.ml_cloud:
         for i in range(args.num_envs_per_node):
-          print(f'Start server {i}')
+          carla_gpu_id = carla_gpu_assignments[i]
+          print(f'Start server {i} on GPU {carla_gpu_id}')
           # The -nullrhi option prevents CARLA from using the GPU at all.
           # Camera observations require rendering, so we disable -nullrhi when use_camera=True.
           if args.carla_singularity:
@@ -474,7 +486,7 @@ if __name__ == '__main__':
                   f'singularity exec --nv --bind {args.carla_root}:{args.carla_root},{raw_logdir}:{raw_logdir} {args.carla_singularity_path} '
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
+                    f'-RenderOffScreen -graphicsadapter={carla_gpu_id} -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           else:
             carla_processes.append(
@@ -482,7 +494,7 @@ if __name__ == '__main__':
                   f'{ld_lib_prefix}'
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
+                    f'-RenderOffScreen -graphicsadapter={carla_gpu_id} -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           time.sleep(cloud_server_wait_s)
 
@@ -498,7 +510,8 @@ if __name__ == '__main__':
           time.sleep(cloud_client_wait_s)
       else:
         for i in range(args.num_envs_per_node):
-          print(f'Start server {i}')
+          carla_gpu_id = carla_gpu_assignments[i]
+          print(f'Start server {i} on GPU {carla_gpu_id}')
           # The -nullrhi option prevents CARLA from using the GPU at all.
           # Camera observations require rendering, so we disable -nullrhi when use_camera=True.
 
@@ -508,7 +521,7 @@ if __name__ == '__main__':
                   f'singularity exec --nv --bind {args.carla_root}:{args.carla_root},{raw_logdir}:{raw_logdir} {args.carla_singularity_path} '
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
+                    f'-RenderOffScreen -graphicsadapter={carla_gpu_id} -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           else:
             carla_processes.append(
@@ -516,7 +529,7 @@ if __name__ == '__main__':
                   f'{ld_lib_prefix}'
                     f'bash {args.carla_root}/CarlaUE4.sh -carla-rpc-port={client_ports[i]} -nosound {carla_rendering_flag}'
                     f'-carla-primary-port={carla_primary_ports[i]} -carla-streaming-port={sensor_ports[i]} '
-                    f'-RenderOffScreen -graphicsadapter=0 -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
+                    f'-RenderOffScreen -graphicsadapter={carla_gpu_id} -RPCThreads={num_threads_per_server} -StreamingThreads={num_threads_per_server} -SecondaryThreads={num_threads_per_server} {carla_threading_flag}',
                     shell=True, stdout=server_outs[i], stderr=server_errs[i]))
           time.sleep(local_server_wait_s)
           print(f'Start client {i}')
