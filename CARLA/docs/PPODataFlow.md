@@ -275,6 +275,114 @@ With the provided debug script:
 
 So one PPO update collects about 32 samples before starting optimization.
 
+## How `total_batch_size` And `total_minibatch_size` Are Determined
+
+There are two places involved:
+
+- `team_code/train_parallel.py`
+- `team_code/dd_ppo.py`
+
+### Source-of-truth parameters
+
+In normal training runs started through `train_parallel.py`, the more fundamental rollout parameters are:
+
+- `num_nodes`
+- `num_envs_per_node`
+- `rollout_steps_per_env`
+- `minibatches_per_update`
+
+From these values, `train_parallel.py` derives the effective PPO batch settings before launching `dd_ppo.py`.
+
+### Override logic in `train_parallel.py`
+
+If `--total_batch_size` is **not** explicitly provided on the command line and `rollout_steps_per_env` is present, then:
+
+$$
+total\_batch\_size = total\_envs\_global \times rollout\_steps\_per\_env
+$$
+
+where:
+
+$$
+total\_envs\_global = num\_nodes \times num\_envs\_per\_node
+$$
+
+If `--total_minibatch_size` is **not** explicitly provided on the command line and `minibatches_per_update` is present, then:
+
+$$
+total\_minibatch\_size = \frac{total\_batch\_size}{minibatches\_per\_update}
+$$
+
+This means that values written in grouped config files can be replaced by the rollout-derived values during launch.
+
+### Important consequence
+
+When using grouped JSON configs such as `camera_train_default.json` or `camera_train_transfuser.json`:
+
+- editing `total_batch_size` alone may not change the effective batch size,
+- editing `total_minibatch_size` alone may not change the effective minibatch size,
+- the final values may still be recomputed from `rollout_steps_per_env` and `minibatches_per_update`.
+
+In practice, if you want the launch-time effective values to be:
+
+- `total_batch_size = 512`
+- `total_minibatch_size = 16`
+
+and you are running with:
+
+- `num_nodes = 1`
+- `num_envs_per_node = 8`
+
+then you need rollout parameters consistent with:
+
+$$
+rollout\_steps\_per\_env = 64
+$$
+
+because:
+
+$$
+8 \times 64 = 512
+$$
+
+and:
+
+$$
+minibatches\_per\_update = 32
+$$
+
+because:
+
+$$
+\frac{512}{32} = 16
+$$
+
+### Local per-process values inside `dd_ppo.py`
+
+After the effective global values are finalized, `dd_ppo.py` computes per-process training sizes as:
+
+$$
+local\_batch\_size = \frac{total\_batch\_size}{world\_size}
+$$
+
+$$
+local\_bs\_per\_env = \frac{local\_batch\_size}{num\_envs\_per\_proc}
+$$
+
+$$
+local\_minibatch\_size = \frac{total\_minibatch\_size}{world\_size}
+$$
+
+$$
+num\_minibatches = \frac{local\_batch\_size}{local\_minibatch\_size}
+$$
+
+These are the values that actually determine:
+
+- rollout buffer shapes,
+- how many samples are collected before optimization,
+- how many samples go into each PPO optimization minibatch on each process.
+
 ## Where Time Is Spent
 
 The data collection loop in `dd_ppo.py` already separates major timing components:

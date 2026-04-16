@@ -562,6 +562,10 @@ def parse_args(config):
                       type=int,
                       default=config.num_value_measurements,
                       help='Number of measurements exclusive to the value head.')
+  parser.add_argument('--bev_encoder_type',
+                      type=str,
+                      default=config.bev_encoder_type,
+                      help='Visual BEV encoder type. Options: simple, transfuser')
   parser.add_argument('--render_yellow_time',
                       type=lambda x: bool(strtobool(x)),
                       default=config.render_yellow_time,
@@ -642,6 +646,31 @@ def parse_args(config):
                       type=str,
                       default=config.camera_encoder,
                       help='Camera encoder type. Options: simple_cnn')
+  parser.add_argument('--transfuser_image_architecture',
+                      type=str,
+                      default=config.transfuser_image_architecture,
+                      help='Image backbone for the TransFuser camera-to-BEV encoder.')
+  parser.add_argument('--transfuser_lidar_architecture',
+                      type=str,
+                      default=config.transfuser_lidar_architecture,
+                      help='BEV backbone for the TransFuser camera-to-BEV encoder.')
+  parser.add_argument('--transfuser_latent_tf',
+                      type=lambda x: bool(strtobool(x)),
+                      default=config.transfuser_latent_tf,
+                      nargs='?',
+                      const=True,
+                      help='Whether TransFuser BEV branch uses positional latent tokens.')
+  parser.add_argument('--use_camera_gt',
+                      type=lambda x: bool(strtobool(x)),
+                      default=config.use_camera_gt,
+                      nargs='?',
+                      const=True,
+                      help='Whether to additionally register GT camera sensors.')
+  parser.add_argument('--camera_gt_modalities',
+                      type=str,
+                      nargs='*',
+                      default=config.camera_gt_modalities,
+                      help='Optional GT camera modalities. Choices: semantic_segmentation depth instance_segmentation')
 
   args, unknown = parser.parse_known_args()
   unknown = filter_launcher_unknown_args(unknown)

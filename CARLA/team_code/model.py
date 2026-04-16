@@ -11,84 +11,32 @@ import torch
 from torch import nn
 import numpy as np
 import cv2
-import timm
 
+from camera_agent.encoder import BEVEncoder, CameraEncoder
 from distributions import BetaDistribution, DiagGaussianDistribution, BetaUniformMixtureDistribution
 
+class MeasurementEncoder(nn.Module):
+  """Encode low-dimensional driving measurements."""
 
-class CustomCnn(nn.Module):
-  """
-    A custom CNN with timm backbone extractors.
-    """
-
-  def __init__(self, config, n_input_channels):
+  def __init__(self, observation_space, states_neurons, config):
     super().__init__()
-    self.config = config
-    self.image_encoder = timm.create_model(config.image_encoder,
-                                           in_chans=n_input_channels,
-                                           pretrained=False,
-                                           features_only=True)
-    final_width = int(self.config.bev_semantics_width / self.image_encoder.feature_info.info[-1]['reduction'])
-    final_height = int(self.config.bev_semantics_height / self.image_encoder.feature_info.info[-1]['reduction'])
-    final_total_pxiels = final_height * final_width
-    # We want to output roughly the same amount of features as the roach encoder.
-    self.out_channels = int(1024 / final_total_pxiels)
-    self.change_channel = nn.Conv2d(self.image_encoder.feature_info.info[-1]['num_chs'],
-                                    self.out_channels,
-                                    kernel_size=1)
+    self.output_dim = states_neurons[-1]
+    layer_dims = [observation_space['measurements'].shape[0]] + list(states_neurons)
+    layers = []
+    for i in range(len(layer_dims) - 1):
+      layers.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
+      if config.use_layer_norm:
+        layers.append(nn.LayerNorm(layer_dims[i + 1]))
+      layers.append(nn.ReLU())
+    self.encoder = nn.Sequential(*layers)
 
-  def forward(self, x):
-    x = self.image_encoder(x)
-    x = x[-1]
-    x = self.change_channel(x)
-    x = torch.flatten(x, start_dim=1)
-    return x
+  def forward(self, measurements):
+    return self.encoder(measurements)
 
 
-class CameraCNN(nn.Module):
-  """Lightweight CNN encoder for a single camera image."""
-
-  def __init__(self, config):
-    super().__init__()
-    self.config = config
-    self.cnn = nn.Sequential(
-        nn.Conv2d(3, 16, kernel_size=5, stride=2),
-        nn.ReLU(),
-        nn.Conv2d(16, 32, kernel_size=5, stride=2),
-        nn.ReLU(),
-        nn.Conv2d(32, 64, kernel_size=3, stride=2),
-        nn.ReLU(),
-        nn.Conv2d(64, 128, kernel_size=3, stride=2),
-        nn.ReLU(),
-    )
-    # Compute flattened size via dummy forward pass
-    with torch.no_grad():
-      dummy = torch.zeros(1, 3, config.camera_height, config.camera_width)
-      n_flatten = math.prod(self.cnn(dummy).shape[1:])
-    self.fc = nn.Sequential(
-        nn.Linear(n_flatten, config.camera_features_dim),
-        nn.ReLU(),
-    )
-    self.apply(self._weights_init)
-
-  @staticmethod
-  def _weights_init(m):
-    if isinstance(m, nn.Conv2d):
-      nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
-      nn.init.constant_(m.bias, 0.1)
-
-  def forward(self, x):
-    """x: (B, 3, H, W) float32 in [0, 1]"""
-    x = self.cnn(x)
-    x = torch.flatten(x, start_dim=1)
-    x = self.fc(x)
-    return x
-
-
-# Input image feature extractor class
-class XtMaCNN(nn.Module):
+class SensorDataEncoder(nn.Module):
   '''
-  Inspired by https://github.com/xtma/pytorch_car_caring
+  Encodes measurements plus optional BEV and RGB camera observations.
   '''
 
   def __init__(self, observation_space, states_neurons, config):
@@ -96,105 +44,29 @@ class XtMaCNN(nn.Module):
     self.features_dim = config.features_dim
     self.config = config
     self.use_bev_input = getattr(config, 'use_bev_input', True)
+    self.use_camera = getattr(config, 'use_camera', False)
+    if not self.use_bev_input and not self.use_camera:
+      raise ValueError('Invalid encoder configuration: at least one of use_bev_input/use_camera must be enabled.')
 
-    n_input_channels = observation_space['bev_semantics'].shape[0]
-
-    if self.config.use_positional_encoding:
-      n_input_channels += 2
-
-    self.cnn = None
+    self.measurement_encoder = MeasurementEncoder(observation_space, states_neurons, config)
+    self.state_feature_dim = self.measurement_encoder.output_dim
+    self.bev_encoder = None
     self.cnn_out_shape = None
     self.n_flatten = 0
     if self.use_bev_input:
-      if self.config.image_encoder == 'roach':
-        self.cnn = nn.Sequential(  # in [B, 15, 192, 192]
-            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
-            nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-            nn.ReLU(),
-        )
-      elif self.config.image_encoder == 'roach_ln':  # input is expected to be [B, C, 192, 192]
-        self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 94, 94]
-            nn.LayerNorm((8, 94, 94)),
-            nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 45, 45]
-            nn.LayerNorm((16, 45, 45)),
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=5, stride=2),  # -> [B, 32, 21, 21]
-            nn.LayerNorm((32, 21, 21)),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 10, 10]
-            nn.LayerNorm((64, 10, 10)),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2),  # -> [B, 128, 4, 4]
-            nn.LayerNorm((128, 4, 4)),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-            nn.LayerNorm((256, 2, 2)),
-            nn.ReLU(),
-        )
-      elif self.config.image_encoder == 'roach_ln2':  # input is expected to be [B, C, 256, 256]
-        self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),  # -> [B, 8, 126, 126]
-            nn.LayerNorm((8, 126, 126)),
-            nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=5, stride=2),  # -> [B, 16, 61, 61]
-            nn.LayerNorm((16, 61, 61)),
-            nn.ReLU(),
-            nn.Conv2d(16, 24, kernel_size=5, stride=2),  # -> [B, 16, 29, 29]
-            nn.LayerNorm((24, 29, 29)),
-            nn.ReLU(),
-            nn.Conv2d(24, 32, kernel_size=5, stride=2),  # -> [B, 32, 13, 13]
-            nn.LayerNorm((32, 13, 13)),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2),  # -> [B, 64, 6, 6]
-            nn.LayerNorm((64, 6, 6)),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1),  # -> [B, 128, 4, 4]
-            nn.LayerNorm((128, 4, 4)),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1),  # -> [B, 256, 2, 2]
-            nn.LayerNorm((256, 2, 2)),
-            nn.ReLU(),
-        )
-      else:
-        self.cnn = CustomCnn(config, n_input_channels)
+      self.bev_encoder = BEVEncoder(observation_space, config)
+      self.cnn_out_shape = self.bev_encoder.cnn_out_shape
+      self.n_flatten = self.bev_encoder.n_flatten
+      if self.bev_encoder.requires_camera_input and not self.use_camera:
+        raise ValueError('bev_encoder_type=transfuser requires use_camera=True')
 
-      # Compute shape by doing one forward pass
-      with torch.no_grad():
-        sample_bev = torch.as_tensor(observation_space['bev_semantics'].sample()[None]).float()
-        if self.config.use_positional_encoding:  # CoordConv layer
-          x = torch.linspace(-1, 1, self.config.bev_semantics_height)
-          y = torch.linspace(-1, 1, self.config.bev_semantics_width)
-          y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
-          y_grid = y_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
-          x_grid = x_grid.to(device=sample_bev.device).unsqueeze(0).unsqueeze(0)
-
-          sample_bev = torch.concatenate((sample_bev, y_grid, x_grid), dim=1)
-
-        self.cnn_out_shape = self.cnn(sample_bev).shape
-        self.n_flatten = math.prod(self.cnn_out_shape[1:])
-
-    self.states_neurons = states_neurons[-1]
-
-    # Camera encoder (shared across all cameras)
-    self.use_camera = getattr(config, 'use_camera', False)
     camera_total_features = 0
-    if self.use_camera:
-      self.camera_cnn = CameraCNN(config)
-      num_cameras = config.get_num_cameras()
-      camera_total_features = num_cameras * config.camera_features_dim
+    self.camera_encoder = None
+    if self.use_camera and (self.bev_encoder is None or not self.bev_encoder.requires_camera_input):
+      self.camera_encoder = CameraEncoder(config)
+      camera_total_features = self.camera_encoder.output_dim
 
-    fusion_input_dim = self.n_flatten + states_neurons[-1] + camera_total_features
+    fusion_input_dim = self.n_flatten + self.state_feature_dim + camera_total_features
     if self.config.use_layer_norm:
       self.linear = nn.Sequential(nn.Linear(fusion_input_dim, 512), nn.LayerNorm(512), nn.ReLU(),
                                   nn.Linear(512, config.features_dim), nn.LayerNorm(config.features_dim), nn.ReLU())
@@ -202,51 +74,15 @@ class XtMaCNN(nn.Module):
       self.linear = nn.Sequential(nn.Linear(fusion_input_dim, 512), nn.ReLU(),
                                   nn.Linear(512, config.features_dim), nn.ReLU())
 
-    states_neurons = [observation_space['measurements'].shape[0]] + list(states_neurons)
-    self.state_linear = []
-    for i in range(len(states_neurons) - 1):
-      self.state_linear.append(nn.Linear(states_neurons[i], states_neurons[i + 1]))
-      if self.config.use_layer_norm:
-        self.state_linear.append(nn.LayerNorm(states_neurons[i + 1]))
-      self.state_linear.append(nn.ReLU())
-    self.state_linear = nn.Sequential(*self.state_linear)
-
-    if self.use_bev_input and self.config.image_encoder in ('roach', 'roach_ln', 'roach_ln2'):
-      self.apply(self._weights_init)
-
-  @staticmethod
-  def _weights_init(m):
-    if isinstance(m, nn.Conv2d):
-      nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
-      nn.init.constant_(m.bias, 0.1)
-
   def forward(self, bev_semantics, measurements, camera_images=None):
-    latent_state = self.state_linear(measurements)
+    latent_state = self.measurement_encoder(measurements)
 
     parts = [latent_state]
     if self.use_bev_input:
-      if self.config.use_positional_encoding:  # CoordConv layer
-        x = torch.linspace(-1, 1, self.config.bev_semantics_height)
-        y = torch.linspace(-1, 1, self.config.bev_semantics_width)
-        y_grid, x_grid = torch.meshgrid(x, y, indexing='ij')
-        y_grid = y_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
-            bev_semantics.shape[0], -1, -1, -1)
-        x_grid = x_grid.to(device=bev_semantics.device).unsqueeze(0).unsqueeze(0).expand(
-            bev_semantics.shape[0], -1, -1, -1)
+      parts.insert(0, self.bev_encoder(bev_semantics, camera_images=camera_images))
 
-        bev_semantics = torch.concatenate((bev_semantics, y_grid, x_grid), dim=1)
-
-      x = self.cnn(bev_semantics)
-      x = torch.flatten(x, start_dim=1)
-      parts.insert(0, x)
-
-    if self.use_camera and camera_images is not None:
-      # camera_images: (B, N, 3, H, W) float32 in [0, 1]
-      B, N = camera_images.shape[:2]
-      cam_flat = camera_images.reshape(B * N, *camera_images.shape[2:])  # (B*N, 3, H, W)
-      cam_features = self.camera_cnn(cam_flat)  # (B*N, camera_features_dim)
-      cam_features = cam_features.reshape(B, N * cam_features.shape[-1])  # (B, N*camera_features_dim)
-      parts.append(cam_features)
+    if self.camera_encoder is not None and camera_images is not None:
+      parts.append(self.camera_encoder(camera_images))
 
     x = torch.cat(parts, dim=1)
     x = self.linear(x)
@@ -323,7 +159,7 @@ class PPOPolicy(nn.Module):
     self.action_space = action_space
     self.config = config
 
-    self.features_extractor = XtMaCNN(observation_space, config=config, states_neurons=states_neurons)
+    self.features_extractor = SensorDataEncoder(observation_space, config=config, states_neurons=states_neurons)
 
     if self.config.use_lstm:
       self.lstm = nn.LSTM(config.features_dim, config.features_dim, num_layers=config.num_lstm_layers)
@@ -402,7 +238,9 @@ class PPOPolicy(nn.Module):
     measurements = observations['measurements']
     birdview = bev_semantics / 255.0
     camera_images = None
-    if self.config.use_camera and 'camera_images' in observations:
+    if self.config.use_camera:
+      if 'camera_images' not in observations:
+        raise KeyError('camera_images missing from observations while use_camera=True')
       # (B, N, H, W, 3) uint8 -> (B, N, 3, H, W) float32 [0, 1]
       cam = observations['camera_images'].to(dtype=torch.float32) / 255.0
       camera_images = cam.permute(0, 1, 4, 2, 3)

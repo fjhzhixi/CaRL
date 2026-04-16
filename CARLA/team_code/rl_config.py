@@ -3,6 +3,8 @@ Config class that contains all the hyperparameters needed to build any model.
 '''
 import numpy as np
 
+from camera_agent.camera_config import build_camera_sensors, get_camera_ids
+
 
 class GlobalConfig:
   '''
@@ -155,25 +157,21 @@ class GlobalConfig:
     self.obs_num_measurements = 8  # Number of scalar measurements in observation.
     self.obs_num_channels = 15  # Number of channels in the bev observation.
     self.use_bev_input = True  # Whether the model consumes bev_semantics as an input branch.
+    self.bev_encoder_type = 'simple'  # Options: simple, transfuser
 
     ####### Camera sensor parameters ############
     self.use_camera = False  # Whether to attach and use RGB camera sensors
     self.camera_mode = 'front'  # 'front' for 1 camera, 'surround' for 6 cameras
-    self.camera_width = 400  # Image width in pixels (default small for RL efficiency)
-    self.camera_height = 225  # Image height in pixels
-    self.camera_fov = 70  # Field of view in degrees
+    self.camera_width = 384  # Image width in pixels, aligned with LEAD 6-camera setup
+    self.camera_height = 384  # Image height in pixels, aligned with LEAD 6-camera setup
+    self.camera_fov = 60  # Field of view in degrees, aligned with LEAD 6-camera setup
     self.camera_features_dim = 256  # Output dim of camera encoder
     self.camera_encoder = 'simple_cnn'  # Camera encoder type
+    self.use_camera_gt = False  # Whether to also register GT camera sensors.
+    self.camera_gt_modalities = []  # Supported: semantic_segmentation, depth, instance_segmentation.
 
-    # Camera sensor placements matching Bench2Drive nuScenes-style layout
-    self.camera_sensors = {
-        'CAM_FRONT': {'x': 0.80, 'y': 0.0, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'fov': 70},
-        'CAM_FRONT_LEFT': {'x': 0.27, 'y': -0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -55.0, 'fov': 70},
-        'CAM_FRONT_RIGHT': {'x': 0.27, 'y': 0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 55.0, 'fov': 70},
-        'CAM_BACK': {'x': -2.0, 'y': 0.0, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 180.0, 'fov': 110},
-        'CAM_BACK_LEFT': {'x': -0.32, 'y': -0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -110.0, 'fov': 70},
-        'CAM_BACK_RIGHT': {'x': -0.32, 'y': 0.55, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 110.0, 'fov': 70},
-    }
+    # Camera sensor placements follow the minimal LEAD-style rig.
+    self.camera_sensors = build_camera_sensors(self.camera_mode, default_fov=self.camera_fov)
 
     ####### Distribution parameters ############
     self.distribution = 'beta'  # Distribution used for the action space. Options beta, normal, beta_uni_mix
@@ -273,6 +271,23 @@ class GlobalConfig:
     self.use_temperature = False  # Whether the output distribution parameters are divided by a learned temperature
     self.min_temperature = 0.1  # Whether the output distribution parameters are divided by a learned temperature
 
+    ####### TransFuser camera->BEV encoder parameters ############
+    self.transfuser_image_architecture = 'resnet34'
+    self.transfuser_lidar_architecture = 'resnet34'
+    self.transfuser_latent_tf = True
+    self.transfuser_block_exp = 4
+    self.transfuser_n_layer = 2
+    self.transfuser_n_head = 4
+    self.transfuser_embd_pdrop = 0.1
+    self.transfuser_resid_pdrop = 0.1
+    self.transfuser_attn_pdrop = 0.1
+    self.transfuser_gpt_linear_layer_init_mean = 0.0
+    self.transfuser_gpt_linear_layer_init_std = 0.02
+    self.transfuser_gpt_layer_norm_init_weight = 1.0
+    self.transfuser_bev_features_channels = 64
+    self.transfuser_bev_down_sample_factor = 4
+    self.transfuser_bev_upsample_factor = 2
+
     # Whether to use the histogram loss gauss to train the value head via classification (instead of regression + L2)
     self.use_hl_gauss_value_loss = False
     self.hl_gauss_std = 0.75  # Standard deviation use for the gaussian histogram loss
@@ -289,11 +304,29 @@ class GlobalConfig:
   def initialize(self, **kwargs):
     for k, v in kwargs.items():
       setattr(self, k, v)
+    self.refresh_camera_sensors()
 
   def get_num_cameras(self):
-    return 1 if self.camera_mode == 'front' else 6
+    return len(self.get_camera_ids())
 
   def get_camera_ids(self):
-    if self.camera_mode == 'front':
-      return ['CAM_FRONT']
-    return ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
+    return get_camera_ids(self.camera_mode)
+
+  def refresh_camera_sensors(self):
+    self.camera_sensors = build_camera_sensors(self.camera_mode, default_fov=self.camera_fov)
+
+  @property
+  def transfuser_img_vert_anchors(self):
+    return self.camera_height // 32
+
+  @property
+  def transfuser_img_horz_anchors(self):
+    return (self.get_num_cameras() * self.camera_width) // 32
+
+  @property
+  def transfuser_lidar_vert_anchors(self):
+    return self.bev_semantics_height // 32
+
+  @property
+  def transfuser_lidar_horz_anchors(self):
+    return self.bev_semantics_width // 32

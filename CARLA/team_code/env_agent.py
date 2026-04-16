@@ -36,6 +36,7 @@ from birds_eye_view.bev_observation import ObsManager as ObsManager2
 from birds_eye_view.run_stop_sign import RunStopSign
 from nav_planner import RoutePlanner
 from model import PPOPolicy
+from camera_agent.sensor_setup import build_camera_sensors
 
 jsonpickle_numpy.register_handlers()
 jsonpickle.set_encoder_options('json', sort_keys=True, indent=4)
@@ -113,33 +114,14 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
       with open(config_path, 'rt', encoding='utf-8') as f:
         loaded_config = jsonpickle.decode(f.read())
       # Only update camera-related fields to avoid side effects
-      for key in ('use_camera', 'camera_mode', 'camera_width', 'camera_height',
-                  'camera_fov', 'camera_features_dim', 'camera_encoder', 'camera_sensors'):
+      for key in ('use_camera', 'camera_mode', 'camera_width', 'camera_height', 'camera_fov', 'camera_features_dim',
+                  'camera_encoder', 'use_camera_gt', 'camera_gt_modalities', 'camera_sensors'):
         if hasattr(loaded_config, key):
           setattr(self.config, key, getattr(loaded_config, key))
+      self.config.refresh_camera_sensors()
 
   def sensors(self):
-    sensors = []
-
-    if self.config.use_camera:
-      camera_ids = self.config.get_camera_ids()
-      for cam_id in camera_ids:
-        cam_spec = self.config.camera_sensors[cam_id]
-        sensors.append({
-            'type': 'sensor.camera.rgb',
-            'x': cam_spec['x'],
-            'y': cam_spec['y'],
-            'z': cam_spec['z'],
-            'roll': cam_spec['roll'],
-            'pitch': cam_spec['pitch'],
-            'yaw': cam_spec['yaw'],
-            'width': self.config.camera_width,
-            'height': self.config.camera_height,
-            'fov': cam_spec['fov'],
-            'id': cam_id
-        })
-
-    return sensors
+    return build_camera_sensors(self.config)
 
   def agent_global_init(self):
     #  Socket to talk to server
@@ -157,6 +139,7 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     )  # Overwrite default config with the configured one from the training process
     loaded_config = jsonpickle.decode(json_config)
     self.config.__dict__.update(loaded_config.__dict__)
+    self.config.refresh_camera_sensors()
     conf_socket.send_string(f'Config received port: {self.port}')
 
     # Connect to env gym to send observations

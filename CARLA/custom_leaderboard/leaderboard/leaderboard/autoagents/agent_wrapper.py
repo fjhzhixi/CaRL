@@ -120,10 +120,12 @@ def validate_sensor_configuration(sensors, agent_track, selected_track):
         else:
             sensor_count[sensor['type']] = 1
 
+    # Regular MAP/SENSORS tracks use the full sensor budget.
+    # Only qualifier tracks should be constrained by the stricter limits.
     if agent_track in (Track.SENSORS_QUALIFIER, Track.MAP_QUALIFIER):
-        sensor_limits = SENSORS_LIMITS
-    else:
         sensor_limits = QUALIFIER_SENSORS_LIMITS
+    else:
+        sensor_limits = SENSORS_LIMITS
 
     for sensor_type, max_instances_allowed in sensor_limits.items():
         if sensor_type in sensor_count and sensor_count[sensor_type] > max_instances_allowed:
