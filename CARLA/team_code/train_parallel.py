@@ -135,6 +135,26 @@ def print_effective_config(summary):
   print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+def expand_town_ids(train_towns, target_length):
+  if target_length <= 0:
+    return tuple()
+  if len(train_towns) == 0:
+    raise ValueError('train_towns must contain at least one town id.')
+
+  normalized_towns = tuple(int(town_id) for town_id in train_towns)
+  return tuple(normalized_towns[idx % len(normalized_towns)] for idx in range(target_length))
+
+
+def describe_returncode(returncode):
+  if returncode is None:
+    return 'still running'
+  if returncode == 0:
+    return 'exited normally (code 0)'
+  if returncode < 0:
+    return f'terminated by signal {-returncode}'
+  return f'exited with code {returncode}'
+
+
 def resolve_logdir(git_root, unknown, config_overrides):
   cli_value = get_unknown_arg_value(unknown, '--logdir', None)
   logdir_value = cli_value if cli_value is not None else config_overrides.get('logdir', None)
@@ -341,8 +361,13 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(raw_logdir, 'logs'), exist_ok=True)
     write_bootstrap_config(logdir, unknown, config_overrides)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
-    route_start_id = args.num_envs_per_gpu * args.node_id
-    route_end_id = 32  # TODO find suitable solution for multinode. route_start_id + args.num_envs_per_gpu
+    num_routes_per_town = 32
+    route_start_id = args.num_envs_per_node * args.node_id
+    route_end_id = min(num_routes_per_town, route_start_id + args.num_envs_per_node)
+    if route_end_id - route_start_id < args.num_envs_per_node:
+      raise ValueError(f'Not enough route files in {args.routes_folder} for node {args.node_id}: '
+                       f'need {args.num_envs_per_node} routes per town, but only '
+                       f'{num_routes_per_town - route_start_id} remain.')
     id_to_townfile_mapping = {
         1: [
             os.path.join(route_root_folder, f'route_Town01_{i:02d}.xml.gz')
@@ -389,14 +414,14 @@ if __name__ == '__main__':
             for i in range(route_start_id, route_end_id)
         ],
     }
-    if not cli_flag_present(sys.argv[1:], '--train_towns') and len(args.train_towns) != args.num_envs_per_node:
-      available_towns = list(id_to_townfile_mapping.keys())
-      args.train_towns = tuple(
-          available_towns[(args.node_id * args.num_envs_per_node + i) % len(available_towns)]
-          for i in range(args.num_envs_per_node)
-      )
+    configured_train_towns = tuple(args.train_towns)
+    args.train_towns = expand_town_ids(configured_train_towns, args.num_envs_per_node)
+    print(f'Configured train_towns={configured_train_towns}')
+    print(f'Expanded train_towns={args.train_towns}')
     route_files = []
     for town_id in args.train_towns:
+      if town_id not in id_to_townfile_mapping:
+        raise ValueError(f'Town id {town_id} is not supported by routes folder {args.routes_folder}.')
       route_files.append(id_to_townfile_mapping[town_id].pop(0))
 
     # CARLA has a bug where it spams Error messages to stderr freezing the entire codebase, including restarts
@@ -686,16 +711,16 @@ if __name__ == '__main__':
         time.sleep(30)
         if train_process.poll() is not None:
           all_processes_running = False
-          print('Train process ended')
+          print(f'Train process ended: {describe_returncode(train_process.returncode)}')
         for idx, carla_process in enumerate(carla_processes):
           if carla_process.poll() is not None:
             all_processes_running = False
-            print('Carla server crashed')
+            print(f'Carla server {idx} ended: {describe_returncode(carla_process.returncode)}')
             skip_next_route = 'True'
         for idx, leaderboard_process in enumerate(leaderboard_processes):
           if leaderboard_process.poll() is not None:
             all_processes_running = False
-            print('Leaderboard process ended')
+            print(f'Leaderboard process {idx} ended: {describe_returncode(leaderboard_process.returncode)}')
             skip_next_route = 'True'
 
       for i in range(360):
@@ -703,12 +728,13 @@ if __name__ == '__main__':
           if carla_process.poll() is not None:
             if idx in ended_carla:
               ended_carla.remove(idx)
-              print(f"Server {idx} terminated")
+              print(f"Server {idx} terminated: {describe_returncode(carla_process.returncode)}")
         for idx, leaderboard_process in enumerate(leaderboard_processes):
           if leaderboard_process.poll() is not None:
             if idx in ended_leaderboard:
               ended_leaderboard.remove(idx)
-        time.sleep(1)
+              print(f"Leaderboard {idx} terminated: {describe_returncode(leaderboard_process.returncode)}")
+            time.sleep(1)
 
       for idx in ended_leaderboard:
         print(f"Leaderboard {idx} is hanging and did not terminate")
