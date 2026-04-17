@@ -358,7 +358,11 @@ def parse_args(config):
   parser.add_argument('--image_encoder',
                       type=str,
                       default=config.image_encoder,
-                      help='Which image cnn encoder to use. Either roach, roach_ln, or timm model name')
+                      help='Image encoder architecture. Options: simple, transfuser')
+  parser.add_argument('--bev_encoder',
+                      type=str,
+                      default=config.bev_encoder,
+                      help='BEV encoder backbone. Options: roach, roach_ln, roach_ln2, or timm model name')
   parser.add_argument('--use_comfort_infraction',
                       type=lambda x: bool(strtobool(x)),
                       default=config.use_comfort_infraction,
@@ -562,10 +566,6 @@ def parse_args(config):
                       type=int,
                       default=config.num_value_measurements,
                       help='Number of measurements exclusive to the value head.')
-  parser.add_argument('--bev_encoder_type',
-                      type=str,
-                      default=config.bev_encoder_type,
-                      help='Visual BEV encoder type. Options: simple, transfuser')
   parser.add_argument('--render_yellow_time',
                       type=lambda x: bool(strtobool(x)),
                       default=config.render_yellow_time,
@@ -641,11 +641,7 @@ def parse_args(config):
   parser.add_argument('--camera_features_dim',
                       type=int,
                       default=config.camera_features_dim,
-                      help='Output dimension of the camera encoder.')
-  parser.add_argument('--camera_encoder',
-                      type=str,
-                      default=config.camera_encoder,
-                      help='Camera encoder type. Options: simple_cnn')
+                      help='Output dimension of the simple image encoder.')
   parser.add_argument('--transfuser_image_architecture',
                       type=str,
                       default=config.transfuser_image_architecture,

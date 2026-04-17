@@ -8,7 +8,7 @@
     "track": 0
   },
   "parallel": {
-    "num_envs_per_gpu": 8,
+    "num_envs_per_gpu": 2,
     "rollout_steps_per_env": 512,
     "minibatches_per_update": 4,
     "route_repetitions": 20,
@@ -100,7 +100,8 @@
     "num_value_measurements": 10
   },
   "model": {
-    "image_encoder": "roach_ln2",
+    "image_encoder": "simple",
+    "bev_encoder": "roach_ln2",
     "use_layer_norm": true,
     "use_layer_norm_policy_head": true,
     "use_positional_encoding": false

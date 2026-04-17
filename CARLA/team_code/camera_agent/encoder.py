@@ -20,27 +20,27 @@ def normalize_imagenet(x):
 class CustomCnn(nn.Module):
   """A custom CNN with timm backbone extractors."""
 
-  def __init__(self, config, n_input_channels):
+  def __init__(self, config, n_input_channels, backbone_name):
     super().__init__()
     self.config = config
-    self.image_encoder = timm.create_model(
-        config.image_encoder,
+    self.backbone = timm.create_model(
+        backbone_name,
         in_chans=n_input_channels,
         pretrained=False,
         features_only=True,
     )
-    final_width = int(self.config.bev_semantics_width / self.image_encoder.feature_info.info[-1]['reduction'])
-    final_height = int(self.config.bev_semantics_height / self.image_encoder.feature_info.info[-1]['reduction'])
+    final_width = int(self.config.bev_semantics_width / self.backbone.feature_info.info[-1]['reduction'])
+    final_height = int(self.config.bev_semantics_height / self.backbone.feature_info.info[-1]['reduction'])
     final_total_pixels = final_height * final_width
     self.out_channels = int(1024 / final_total_pixels)
     self.change_channel = nn.Conv2d(
-        self.image_encoder.feature_info.info[-1]['num_chs'],
+        self.backbone.feature_info.info[-1]['num_chs'],
         self.out_channels,
         kernel_size=1,
     )
 
   def forward(self, x):
-    x = self.image_encoder(x)
+    x = self.backbone(x)
     x = x[-1]
     x = self.change_channel(x)
     x = torch.flatten(x, start_dim=1)
@@ -83,14 +83,11 @@ class SimpleCameraBackbone(nn.Module):
     return self.fc(x)
 
 
-class CameraEncoder(nn.Module):
-  """Encode a batch of multi-camera RGB observations into a fused feature."""
+class SimpleImageEncoder(nn.Module):
+  """Encode a batch of multi-camera RGB observations with the simple CNN image branch."""
 
   def __init__(self, config):
     super().__init__()
-    if getattr(config, 'camera_encoder', 'simple_cnn') != 'simple_cnn':
-      raise ValueError(f"Unsupported camera_encoder: {config.camera_encoder}")
-
     self.config = config
     self.single_camera_encoder = SimpleCameraBackbone(config)
     self.num_cameras = config.get_num_cameras()
@@ -118,7 +115,7 @@ class SimpleBEVEncoder(nn.Module):
     if self.config.use_positional_encoding:
       n_input_channels += 2
 
-    if self.config.image_encoder == 'roach':
+    if self.config.bev_encoder == 'roach':
       self.cnn = nn.Sequential(
           nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),
           nn.ReLU(),
@@ -133,7 +130,7 @@ class SimpleBEVEncoder(nn.Module):
           nn.Conv2d(128, 256, kernel_size=3, stride=1),
           nn.ReLU(),
       )
-    elif self.config.image_encoder == 'roach_ln':
+    elif self.config.bev_encoder == 'roach_ln':
       self.cnn = nn.Sequential(
           nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),
           nn.LayerNorm((8, 94, 94)),
@@ -154,7 +151,7 @@ class SimpleBEVEncoder(nn.Module):
           nn.LayerNorm((256, 2, 2)),
           nn.ReLU(),
       )
-    elif self.config.image_encoder == 'roach_ln2':
+    elif self.config.bev_encoder == 'roach_ln2':
       self.cnn = nn.Sequential(
           nn.Conv2d(n_input_channels, 8, kernel_size=5, stride=2),
           nn.LayerNorm((8, 126, 126)),
@@ -179,7 +176,7 @@ class SimpleBEVEncoder(nn.Module):
           nn.ReLU(),
       )
     else:
-      self.cnn = CustomCnn(config, n_input_channels)
+      self.cnn = CustomCnn(config, n_input_channels, self.config.bev_encoder)
 
     with torch.no_grad():
       sample_bev = torch.as_tensor(observation_space['bev_semantics'].sample()[None]).float()
@@ -188,7 +185,7 @@ class SimpleBEVEncoder(nn.Module):
       self.cnn_out_shape = self.cnn(sample_bev).shape
       self.n_flatten = math.prod(self.cnn_out_shape[1:])
 
-    if self.config.image_encoder in ('roach', 'roach_ln', 'roach_ln2'):
+    if self.config.bev_encoder in ('roach', 'roach_ln', 'roach_ln2'):
       self.apply(self._weights_init)
 
   @staticmethod
@@ -470,14 +467,11 @@ class TransfuserBackbone(nn.Module):
     return self.top_down(bev_features), image_features
 
 
-class TransfuserBEVEncoder(nn.Module):
-  """Camera-to-BEV encoder using the LEAD TransFuser backbone."""
+class TransfuserImageEncoder(nn.Module):
+  """Encode multi-view RGB observations with the LEAD TransFuser backbone."""
 
-  requires_camera_input = True
-
-  def __init__(self, observation_space, config):
+  def __init__(self, config):
     super().__init__()
-    del observation_space
     self.config = config
     self.backbone = TransfuserBackbone(config)
     with torch.no_grad():
@@ -488,9 +482,8 @@ class TransfuserBEVEncoder(nn.Module):
           config.camera_height,
           config.camera_width,
       )
-      bev_features = self._encode_camera(dummy)
-      self.cnn_out_shape = bev_features.shape
-      self.n_flatten = math.prod(self.cnn_out_shape[1:])
+      encoded = self._encode_camera(dummy)
+      self.output_dim = encoded.shape[1]
 
   def _stitch_cameras(self, camera_images):
     batch_size, num_cameras = camera_images.shape[:2]
@@ -502,29 +495,35 @@ class TransfuserBEVEncoder(nn.Module):
   def _encode_camera(self, camera_images):
     stitched_rgb = self._stitch_cameras(camera_images)
     bev_features, _ = self.backbone(stitched_rgb)
-    return bev_features
-
-  def forward(self, bev_semantics, camera_images=None):
-    del bev_semantics
-    if camera_images is None:
-      raise KeyError('camera_images required for TransfuserBEVEncoder')
-    bev_features = self._encode_camera(camera_images)
     return torch.flatten(bev_features, start_dim=1)
+
+  def forward(self, camera_images):
+    return self._encode_camera(camera_images)
+
+
+class ImageEncoder(nn.Module):
+  """Factory wrapper for the supported image encoder implementations."""
+
+  def __init__(self, config):
+    super().__init__()
+    if config.image_encoder == 'simple':
+      self.encoder = SimpleImageEncoder(config)
+    elif config.image_encoder == 'transfuser':
+      self.encoder = TransfuserImageEncoder(config)
+    else:
+      raise ValueError(f'Unsupported image_encoder: {config.image_encoder}')
+    self.output_dim = self.encoder.output_dim
+
+  def forward(self, camera_images):
+    return self.encoder(camera_images)
 
 
 class BEVEncoder(nn.Module):
-  """Factory wrapper for the supported visual encoder implementations."""
+  """Wrapper for the semantic-map BEV encoder implementation."""
 
   def __init__(self, observation_space, config):
     super().__init__()
-    encoder_type = getattr(config, 'bev_encoder_type', 'simple')
-    if encoder_type == 'simple':
-      self.encoder = SimpleBEVEncoder(observation_space, config)
-    elif encoder_type == 'transfuser':
-      self.encoder = TransfuserBEVEncoder(observation_space, config)
-    else:
-      raise ValueError(f'Unsupported bev_encoder_type: {encoder_type}')
-
+    self.encoder = SimpleBEVEncoder(observation_space, config)
     self.requires_camera_input = self.encoder.requires_camera_input
     self.cnn_out_shape = self.encoder.cnn_out_shape
     self.n_flatten = self.encoder.n_flatten

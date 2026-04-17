@@ -115,7 +115,7 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
         loaded_config = jsonpickle.decode(f.read())
       # Only update camera-related fields to avoid side effects
       for key in ('use_camera', 'camera_mode', 'camera_width', 'camera_height', 'camera_fov', 'camera_features_dim',
-                  'camera_encoder', 'use_camera_gt', 'camera_gt_modalities', 'camera_sensors'):
+                  'use_camera_gt', 'camera_gt_modalities', 'camera_sensors'):
         if hasattr(loaded_config, key):
           setattr(self.config, key, getattr(loaded_config, key))
       self.config.refresh_camera_sensors()
@@ -625,5 +625,4 @@ class EnvAgent(autonomous_agent.AutonomousAgent):
     with gzip.open(route_save_path, 'wb') as f:
       test = etree.tostring(tree, xml_declaration=True, encoding='utf-8', pretty_print=True)
       f.write(test)
-
 

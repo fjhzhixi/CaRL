@@ -12,7 +12,7 @@ from torch import nn
 import numpy as np
 import cv2
 
-from camera_agent.encoder import BEVEncoder, CameraEncoder
+from camera_agent.encoder import BEVEncoder, ImageEncoder
 from distributions import BetaDistribution, DiagGaussianDistribution, BetaUniformMixtureDistribution
 
 class MeasurementEncoder(nn.Module):
@@ -45,8 +45,13 @@ class SensorDataEncoder(nn.Module):
     self.config = config
     self.use_bev_input = getattr(config, 'use_bev_input', True)
     self.use_camera = getattr(config, 'use_camera', False)
+    self.image_encoder_type = getattr(config, 'image_encoder', 'simple')
     if not self.use_bev_input and not self.use_camera:
       raise ValueError('Invalid encoder configuration: at least one of use_bev_input/use_camera must be enabled.')
+    if self.image_encoder_type not in ('simple', 'transfuser'):
+      raise ValueError(f'Unsupported image_encoder: {self.image_encoder_type}')
+    if self.image_encoder_type == 'transfuser' and not self.use_camera:
+      raise ValueError('image_encoder=transfuser requires use_camera=True')
 
     self.measurement_encoder = MeasurementEncoder(observation_space, states_neurons, config)
     self.state_feature_dim = self.measurement_encoder.output_dim
@@ -57,16 +62,14 @@ class SensorDataEncoder(nn.Module):
       self.bev_encoder = BEVEncoder(observation_space, config)
       self.cnn_out_shape = self.bev_encoder.cnn_out_shape
       self.n_flatten = self.bev_encoder.n_flatten
-      if self.bev_encoder.requires_camera_input and not self.use_camera:
-        raise ValueError('bev_encoder_type=transfuser requires use_camera=True')
 
-    camera_total_features = 0
-    self.camera_encoder = None
-    if self.use_camera and (self.bev_encoder is None or not self.bev_encoder.requires_camera_input):
-      self.camera_encoder = CameraEncoder(config)
-      camera_total_features = self.camera_encoder.output_dim
+    image_total_features = 0
+    self.image_encoder = None
+    if self.use_camera:
+      self.image_encoder = ImageEncoder(config)
+      image_total_features = self.image_encoder.output_dim
 
-    fusion_input_dim = self.n_flatten + self.state_feature_dim + camera_total_features
+    fusion_input_dim = self.n_flatten + self.state_feature_dim + image_total_features
     if self.config.use_layer_norm:
       self.linear = nn.Sequential(nn.Linear(fusion_input_dim, 512), nn.LayerNorm(512), nn.ReLU(),
                                   nn.Linear(512, config.features_dim), nn.LayerNorm(config.features_dim), nn.ReLU())
@@ -79,10 +82,10 @@ class SensorDataEncoder(nn.Module):
 
     parts = [latent_state]
     if self.use_bev_input:
-      parts.insert(0, self.bev_encoder(bev_semantics, camera_images=camera_images))
+      parts.insert(0, self.bev_encoder(bev_semantics))
 
-    if self.camera_encoder is not None and camera_images is not None:
-      parts.append(self.camera_encoder(camera_images))
+    if self.image_encoder is not None and camera_images is not None:
+      parts.append(self.image_encoder(camera_images))
 
     x = torch.cat(parts, dim=1)
     x = self.linear(x)

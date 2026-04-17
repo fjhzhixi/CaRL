@@ -157,7 +157,7 @@ class GlobalConfig:
     self.obs_num_measurements = 8  # Number of scalar measurements in observation.
     self.obs_num_channels = 15  # Number of channels in the bev observation.
     self.use_bev_input = True  # Whether the model consumes bev_semantics as an input branch.
-    self.bev_encoder_type = 'simple'  # Options: simple, transfuser
+    self.bev_encoder = 'roach'  # BEV encoder backbone. Options: roach, roach_ln, roach_ln2, or timm model name.
 
     ####### Camera sensor parameters ############
     self.use_camera = False  # Whether to attach and use RGB camera sensors
@@ -165,8 +165,7 @@ class GlobalConfig:
     self.camera_width = 384  # Image width in pixels, aligned with LEAD 6-camera setup
     self.camera_height = 384  # Image height in pixels, aligned with LEAD 6-camera setup
     self.camera_fov = 60  # Field of view in degrees, aligned with LEAD 6-camera setup
-    self.camera_features_dim = 256  # Output dim of camera encoder
-    self.camera_encoder = 'simple_cnn'  # Camera encoder type
+    self.camera_features_dim = 256  # Output dim of the simple image encoder
     self.use_camera_gt = False  # Whether to also register GT camera sensors.
     self.camera_gt_modalities = []  # Supported: semantic_segmentation, depth, instance_segmentation.
 
@@ -241,9 +240,7 @@ class GlobalConfig:
     self.rpo_alpha = 0.5  # Size of the uniform random value that gets added to a, b
     self.use_green_wave = False  # If true in some routes all TL that the agent encounters are set to green.
     self.green_wave_prob = 0.05  # Probability of a route using green wave (if use_green_wave=True)
-    # You should pick tiny networks for efficiency e.g. convnext_atto.d2_in1k,
-    #  tinynet_e.in1k, vit_small_patch32_224
-    self.image_encoder = 'roach'  # Which image cnn encoder to use. Either roach, roach_ln, or timm model name
+    self.image_encoder = 'simple'  # Image encoder architecture. Options: simple, transfuser
     self.use_layer_norm = False  # Whether to use LayerNorm before ReLU in MLPs.
     # Applicable if use_layer_norm=True, whether to also apply layernorm to the policy head.
     # Can be useful to remove to allow the policy to predict large values (for a, b of Beta).

@@ -5,4 +5,5 @@ python -m torch.distributed.run --nnodes=1 --nproc_per_node=1 --max_restarts=0 -
     --total_batch_size 32 --total_minibatch_size 16 --update_epochs 3 \
     --total_timesteps 10000000 --reward_type simple_reward \
     --debug 1 --debug_type save --ports 5555 \
-    --use_camera True --camera_mode front --camera_width 400 --camera_height 225
+    --use_camera True --camera_mode front --camera_width 400 --camera_height 225 \
+    "$@"

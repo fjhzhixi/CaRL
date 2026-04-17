@@ -114,7 +114,6 @@ def write_bootstrap_config(exp_folder, unknown, config_overrides):
       'camera_height': int(get_effective_value('--camera_height', config.camera_height)),
       'camera_fov': int(get_effective_value('--camera_fov', config.camera_fov)),
       'camera_features_dim': int(get_effective_value('--camera_features_dim', config.camera_features_dim)),
-      'camera_encoder': get_effective_value('--camera_encoder', config.camera_encoder),
   }
   config.initialize(**camera_fields)
   with open(os.path.join(exp_folder, 'config.json'), 'wt', encoding='utf-8') as f:
