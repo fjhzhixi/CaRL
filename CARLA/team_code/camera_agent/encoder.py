@@ -1,6 +1,7 @@
 """Visual encoders for PPO camera and BEV training."""
 
 import math
+import os
 
 import timm
 import torch
@@ -395,6 +396,68 @@ class TransfuserBackbone(nn.Module):
                               kernel_size=3,
                               padding=1)
     self.c5_conv = nn.Conv2d(self.num_lidar_features, config.transfuser_bev_features_channels, kernel_size=1)
+
+    image_encoder_ckpt = getattr(config, 'image_encoder_ckpt', None)
+    if image_encoder_ckpt:
+      self.load_pretrained(image_encoder_ckpt)
+
+  def load_pretrained(self, ckpt_path: str):
+    if not os.path.isfile(ckpt_path):
+      raise FileNotFoundError(f"Pretrained checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(ckpt, dict):
+      if "state_dict" in ckpt:
+        state_dict = ckpt["state_dict"]
+      elif "model" in ckpt:
+        state_dict = ckpt["model"]
+      else:
+        state_dict = ckpt
+    else:
+      state_dict = ckpt
+
+    prefix = "backbone."
+    model_state_dict = self.state_dict()
+    filtered_state_dict = {}
+    skipped_keys = []
+
+    for k, v in state_dict.items():
+      if not k.startswith(prefix):
+        continue
+
+      new_k = k[len(prefix):]
+
+      if new_k not in model_state_dict:
+        skipped_keys.append((k, "not_in_model"))
+        continue
+
+      if model_state_dict[new_k].shape != v.shape:
+        skipped_keys.append(
+            (k, f"shape_mismatch: ckpt={tuple(v.shape)} model={tuple(model_state_dict[new_k].shape)}")
+        )
+        continue
+
+      filtered_state_dict[new_k] = v
+
+    if len(filtered_state_dict) == 0:
+      raise ValueError(
+        f"No matched backbone parameters found in checkpoint: {ckpt_path}"
+      )
+    load_result = self.load_state_dict(filtered_state_dict, strict=False)
+    print(f"[TransfuserBackbone] Loaded pretrained weights from: {ckpt_path}")
+    print(f"[TransfuserBackbone] Matched params: {len(filtered_state_dict)}")
+    if skipped_keys:
+      print(f"[TransfuserBackbone] Skipped keys ({len(skipped_keys)}):")
+      for k, reason in skipped_keys:
+        print(f"  - {k}: {reason}")
+    if load_result.missing_keys:
+      print(f"[TransfuserBackbone] Missing keys after load ({len(load_result.missing_keys)}):")
+      for k in load_result.missing_keys:
+        print(f"  - {k}")
+    if load_result.unexpected_keys:
+      print(f"[TransfuserBackbone] Unexpected keys after load ({len(load_result.unexpected_keys)}):")
+      for k in load_result.unexpected_keys:
+        print(f"  - {k}")
 
   def top_down(self, x):
     p5 = F.relu(self.c5_conv(x), inplace=True)

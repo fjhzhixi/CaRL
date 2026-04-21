@@ -241,6 +241,7 @@ class GlobalConfig:
     self.use_green_wave = False  # If true in some routes all TL that the agent encounters are set to green.
     self.green_wave_prob = 0.05  # Probability of a route using green wave (if use_green_wave=True)
     self.image_encoder = 'simple'  # Image encoder architecture. Options: simple, transfuser
+    self.image_encoder_ckpt = None  # Optional checkpoint used to initialize only the TransFuser image encoder.
     self.use_layer_norm = False  # Whether to use LayerNorm before ReLU in MLPs.
     # Applicable if use_layer_norm=True, whether to also apply layernorm to the policy head.
     # Can be useful to remove to allow the policy to predict large values (for a, b of Beta).
@@ -319,11 +320,51 @@ class GlobalConfig:
   @property
   def transfuser_img_horz_anchors(self):
     return (self.get_num_cameras() * self.camera_width) // 32
+  
+  @property
+  def min_x_meter(self):
+    """Back boundary of the planning area in meters."""
+    return -32
+
+  @property
+  def max_x_meter(self):
+    """Front boundary of the planning area in meters."""
+    return 64
+
+  @property
+  def min_y_meter(self):
+    """Left boundary of the planning area in meters."""
+    return -40
+
+  @property
+  def max_y_meter(self):
+    """Right boundary of the planning area in meters."""
+    return 40
+
+  @property
+  def lidar_width_pixel(self):
+    """Width resolution of LiDAR BEV representation in pixels."""
+    return int((self.max_x_meter - self.min_x_meter) * 4.0)
+
+  @property
+  def lidar_height_pixel(self):
+    """Height resolution of LiDAR BEV representation in pixels."""
+    return int((self.max_y_meter - self.min_y_meter) * 4.0)
+
+  @property
+  def lidar_width_meter(self):
+    """Width of LiDAR coverage area in meters."""
+    return int(self.max_x_meter - self.min_x_meter)
+
+  @property
+  def lidar_height_meter(self):
+    """Height of LiDAR coverage area in meters."""
+    return int(self.max_y_meter - self.min_y_meter)
 
   @property
   def transfuser_lidar_vert_anchors(self):
-    return self.bev_semantics_height // 32
+    return self.lidar_width_pixel // 32
 
   @property
   def transfuser_lidar_horz_anchors(self):
-    return self.bev_semantics_width // 32
+    return self.lidar_height_pixel // 32

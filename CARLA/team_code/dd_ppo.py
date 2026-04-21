@@ -359,6 +359,11 @@ def parse_args(config):
                       type=str,
                       default=config.image_encoder,
                       help='Image encoder architecture. Options: simple, transfuser')
+  parser.add_argument('--image_encoder_ckpt',
+                      type=none_or_str,
+                      nargs='?',
+                      default=config.image_encoder_ckpt,
+                      help='Optional checkpoint used to initialize the TransFuser backbone.')
   parser.add_argument('--bev_encoder',
                       type=str,
                       default=config.bev_encoder,
