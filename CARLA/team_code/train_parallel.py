@@ -360,13 +360,8 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(raw_logdir, 'logs'), exist_ok=True)
     write_bootstrap_config(logdir, unknown, config_overrides)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
-    num_routes_per_town = 32
     route_start_id = args.num_envs_per_node * args.node_id
-    route_end_id = min(num_routes_per_town, route_start_id + args.num_envs_per_node)
-    if route_end_id - route_start_id < args.num_envs_per_node:
-      raise ValueError(f'Not enough route files in {args.routes_folder} for node {args.node_id}: '
-                       f'need {args.num_envs_per_node} routes per town, but only '
-                       f'{num_routes_per_town - route_start_id} remain.')
+    route_end_id = 32  # TODO find suitable solution for multinode. route_start_id + args.num_envs_per_gpu
     id_to_townfile_mapping = {
         1: [
             os.path.join(route_root_folder, f'route_Town01_{i:02d}.xml.gz')
