@@ -377,6 +377,10 @@ if __name__ == '__main__':
     write_bootstrap_config(logdir, unknown, config_overrides)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
     route_start_id = args.num_envs_per_node * args.node_id
+    configured_train_towns = tuple(args.train_towns)
+    args.train_towns = expand_town_ids(configured_train_towns, args.num_envs_per_node)
+    print(f'Configured train_towns={configured_train_towns}')
+    print(f'Expanded train_towns={args.train_towns}')
     town_route_names = {
         1: 'Town01',
         2: 'Town02',
@@ -390,15 +394,13 @@ if __name__ == '__main__':
         13: 'Town13',
         15: 'Town15',
     }
+    requested_town_ids = tuple(sorted(set(args.train_towns)))
     id_to_townfile_mapping = {
         town_id: get_cyclic_town_route_files(
-            route_root_folder, town_route_name, route_start_id, args.num_envs_per_node)
-        for town_id, town_route_name in town_route_names.items()
+            route_root_folder, town_route_names[town_id], route_start_id, args.num_envs_per_node)
+        for town_id in requested_town_ids
+        if town_id in town_route_names
     }
-    configured_train_towns = tuple(args.train_towns)
-    args.train_towns = expand_town_ids(configured_train_towns, args.num_envs_per_node)
-    print(f'Configured train_towns={configured_train_towns}')
-    print(f'Expanded train_towns={args.train_towns}')
     route_files = []
     for town_id in args.train_towns:
       if town_id not in id_to_townfile_mapping:
