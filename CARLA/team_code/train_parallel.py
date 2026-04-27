@@ -144,6 +144,22 @@ def expand_town_ids(train_towns, target_length):
   return tuple(normalized_towns[idx % len(normalized_towns)] for idx in range(target_length))
 
 
+def get_cyclic_town_route_files(route_root_folder, town_route_name, start_id, target_length):
+  route_files = []
+  route_pattern = re.compile(rf'^route_{re.escape(town_route_name)}_(\d+)\.xml\.gz$')
+  for filename in os.listdir(route_root_folder):
+    match = route_pattern.match(filename)
+    if match is None:
+      continue
+    route_files.append((int(match.group(1)), os.path.join(route_root_folder, filename)))
+
+  if not route_files:
+    raise ValueError(f'No route files found for {town_route_name} in {route_root_folder}.')
+
+  route_files = [path for _, path in sorted(route_files)]
+  return [route_files[(start_id + idx) % len(route_files)] for idx in range(target_length)]
+
+
 def describe_returncode(returncode):
   if returncode is None:
     return 'still running'
@@ -361,52 +377,23 @@ if __name__ == '__main__':
     write_bootstrap_config(logdir, unknown, config_overrides)
     route_root_folder = os.path.join(git_root, fr'custom_leaderboard/leaderboard/data/{args.routes_folder}')
     route_start_id = args.num_envs_per_node * args.node_id
-    route_end_id = 32  # TODO find suitable solution for multinode. route_start_id + args.num_envs_per_gpu
+    town_route_names = {
+        1: 'Town01',
+        2: 'Town02',
+        3: 'Town03',
+        4: 'Town04',
+        5: 'Town05',
+        6: 'Town06',
+        7: 'Town07',
+        10: 'Town10HD',
+        12: 'Town12',
+        13: 'Town13',
+        15: 'Town15',
+    }
     id_to_townfile_mapping = {
-        1: [
-            os.path.join(route_root_folder, f'route_Town01_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        2: [
-            os.path.join(route_root_folder, f'route_Town02_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        3: [
-            os.path.join(route_root_folder, f'route_Town03_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        4: [
-            os.path.join(route_root_folder, f'route_Town04_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        5: [
-            os.path.join(route_root_folder, f'route_Town05_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        6: [
-            os.path.join(route_root_folder, f'route_Town06_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        7: [
-            os.path.join(route_root_folder, f'route_Town07_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        10: [
-            os.path.join(route_root_folder, f'route_Town10HD_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        12: [
-            os.path.join(route_root_folder, f'route_Town12_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        13: [
-            os.path.join(route_root_folder, f'route_Town13_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
-        15: [
-            os.path.join(route_root_folder, f'route_Town15_{i:02d}.xml.gz')
-            for i in range(route_start_id, route_end_id)
-        ],
+        town_id: get_cyclic_town_route_files(
+            route_root_folder, town_route_name, route_start_id, args.num_envs_per_node)
+        for town_id, town_route_name in town_route_names.items()
     }
     configured_train_towns = tuple(args.train_towns)
     args.train_towns = expand_town_ids(configured_train_towns, args.num_envs_per_node)
