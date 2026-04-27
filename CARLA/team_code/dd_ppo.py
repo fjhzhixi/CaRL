@@ -661,6 +661,26 @@ def parse_args(config):
                       nargs='?',
                       const=True,
                       help='Whether TransFuser BEV branch uses positional latent tokens.')
+  parser.add_argument('--transfuser_pixels_per_meter',
+                      type=float,
+                      default=config.transfuser_pixels_per_meter,
+                      help='Pixels per meter for the lead-compatible TransFuser latent BEV grid.')
+  parser.add_argument('--transfuser_min_x_meter',
+                      type=float,
+                      default=config.transfuser_min_x_meter,
+                      help='Back boundary of the lead-compatible TransFuser BEV grid in meters.')
+  parser.add_argument('--transfuser_max_x_meter',
+                      type=float,
+                      default=config.transfuser_max_x_meter,
+                      help='Front boundary of the lead-compatible TransFuser BEV grid in meters.')
+  parser.add_argument('--transfuser_min_y_meter',
+                      type=float,
+                      default=config.transfuser_min_y_meter,
+                      help='Left boundary of the lead-compatible TransFuser BEV grid in meters.')
+  parser.add_argument('--transfuser_max_y_meter',
+                      type=float,
+                      default=config.transfuser_max_y_meter,
+                      help='Right boundary of the lead-compatible TransFuser BEV grid in meters.')
   parser.add_argument('--use_camera_gt',
                       type=lambda x: bool(strtobool(x)),
                       default=config.use_camera_gt,

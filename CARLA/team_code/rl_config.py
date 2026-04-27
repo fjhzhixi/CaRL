@@ -285,6 +285,11 @@ class GlobalConfig:
     self.transfuser_bev_features_channels = 64
     self.transfuser_bev_down_sample_factor = 4
     self.transfuser_bev_upsample_factor = 2
+    self.transfuser_pixels_per_meter = 4.0
+    self.transfuser_min_x_meter = -32
+    self.transfuser_max_x_meter = 64
+    self.transfuser_min_y_meter = -40
+    self.transfuser_max_y_meter = 40
 
     # Whether to use the histogram loss gauss to train the value head via classification (instead of regression + L2)
     self.use_hl_gauss_value_loss = False
@@ -323,48 +328,48 @@ class GlobalConfig:
   
   @property
   def min_x_meter(self):
-    """Back boundary of the planning area in meters."""
-    return -32
+    """Deprecated TransFuser BEV alias. Use transfuser_min_x_meter."""
+    return self.transfuser_min_x_meter
 
   @property
   def max_x_meter(self):
-    """Front boundary of the planning area in meters."""
-    return 64
+    """Deprecated TransFuser BEV alias. Use transfuser_max_x_meter."""
+    return self.transfuser_max_x_meter
 
   @property
   def min_y_meter(self):
-    """Left boundary of the planning area in meters."""
-    return -40
+    """Deprecated TransFuser BEV alias. Use transfuser_min_y_meter."""
+    return self.transfuser_min_y_meter
 
   @property
   def max_y_meter(self):
-    """Right boundary of the planning area in meters."""
-    return 40
+    """Deprecated TransFuser BEV alias. Use transfuser_max_y_meter."""
+    return self.transfuser_max_y_meter
 
   @property
-  def lidar_width_pixel(self):
-    """Width resolution of LiDAR BEV representation in pixels."""
-    return int((self.max_x_meter - self.min_x_meter) * 4.0)
+  def transfuser_lidar_width_pixel(self):
+    """Width resolution of the lead-compatible TransFuser BEV grid."""
+    return int((self.transfuser_max_x_meter - self.transfuser_min_x_meter) * self.transfuser_pixels_per_meter)
 
   @property
-  def lidar_height_pixel(self):
-    """Height resolution of LiDAR BEV representation in pixels."""
-    return int((self.max_y_meter - self.min_y_meter) * 4.0)
+  def transfuser_lidar_height_pixel(self):
+    """Height resolution of the lead-compatible TransFuser BEV grid."""
+    return int((self.transfuser_max_y_meter - self.transfuser_min_y_meter) * self.transfuser_pixels_per_meter)
 
   @property
-  def lidar_width_meter(self):
-    """Width of LiDAR coverage area in meters."""
-    return int(self.max_x_meter - self.min_x_meter)
+  def transfuser_lidar_width_meter(self):
+    """Width of the lead-compatible TransFuser BEV coverage area in meters."""
+    return int(self.transfuser_max_x_meter - self.transfuser_min_x_meter)
 
   @property
-  def lidar_height_meter(self):
-    """Height of LiDAR coverage area in meters."""
-    return int(self.max_y_meter - self.min_y_meter)
+  def transfuser_lidar_height_meter(self):
+    """Height of the lead-compatible TransFuser BEV coverage area in meters."""
+    return int(self.transfuser_max_y_meter - self.transfuser_min_y_meter)
 
   @property
   def transfuser_lidar_vert_anchors(self):
-    return self.lidar_width_pixel // 32
+    return self.transfuser_lidar_height_pixel // 32
 
   @property
   def transfuser_lidar_horz_anchors(self):
-    return self.lidar_height_pixel // 32
+    return self.transfuser_lidar_width_pixel // 32

@@ -381,8 +381,8 @@ class TransfuserBackbone(nn.Module):
     self.upsample = nn.Upsample(scale_factor=config.transfuser_bev_upsample_factor, mode='bilinear', align_corners=False)
     self.upsample2 = nn.Upsample(
         size=(
-            config.bev_semantics_height // config.transfuser_bev_down_sample_factor,
-            config.bev_semantics_width // config.transfuser_bev_down_sample_factor,
+            config.transfuser_lidar_height_pixel // config.transfuser_bev_down_sample_factor,
+            config.transfuser_lidar_width_pixel // config.transfuser_bev_down_sample_factor,
         ),
         mode='bilinear',
         align_corners=False,
@@ -399,7 +399,23 @@ class TransfuserBackbone(nn.Module):
 
     image_encoder_ckpt = getattr(config, 'image_encoder_ckpt', None)
     if image_encoder_ckpt:
+      self._print_shape_diagnostics()
       self.load_pretrained(image_encoder_ckpt)
+
+  def _print_shape_diagnostics(self):
+    stitched_width = self.config.get_num_cameras() * self.config.camera_width
+    print("[TransfuserBackbone] Shape diagnostics before checkpoint load:")
+    print(f"  - image: (3, {self.config.camera_height}, {stitched_width})")
+    print(
+        "  - latent BEV: "
+        f"({2 if self.config.transfuser_latent_tf else 1}, "
+        f"{self.config.transfuser_lidar_height_pixel}, {self.config.transfuser_lidar_width_pixel})"
+    )
+    print(
+        "  - anchors: "
+        f"image={self.config.transfuser_img_vert_anchors}x{self.config.transfuser_img_horz_anchors}, "
+        f"lidar={self.config.transfuser_lidar_vert_anchors}x{self.config.transfuser_lidar_horz_anchors}"
+    )
 
   def load_pretrained(self, ckpt_path: str):
     if not os.path.isfile(ckpt_path):
@@ -432,9 +448,13 @@ class TransfuserBackbone(nn.Module):
         continue
 
       if model_state_dict[new_k].shape != v.shape:
-        skipped_keys.append(
-            (k, f"shape_mismatch: ckpt={tuple(v.shape)} model={tuple(model_state_dict[new_k].shape)}")
-        )
+        reason = f"shape_mismatch: ckpt={tuple(v.shape)} model={tuple(model_state_dict[new_k].shape)}"
+        if new_k.endswith("pos_emb"):
+          reason += (
+              "; check camera_mode/camera_width/camera_height and "
+              "transfuser_lidar_height/width/pixels_per_meter preset"
+          )
+        skipped_keys.append((k, reason))
         continue
 
       filtered_state_dict[new_k] = v
@@ -494,19 +514,21 @@ class TransfuserBackbone(nn.Module):
     return image_features + image_features_layer, bev_features + bev_features_layer
 
   def _build_bev_positional_grid(self, batch_size, device):
+    height = self.config.transfuser_lidar_height_pixel
+    width = self.config.transfuser_lidar_width_pixel
     if self.config.transfuser_latent_tf:
-      x = torch.linspace(0, 1, self.config.bev_semantics_width, device=device)
-      y = torch.linspace(0, 1, self.config.bev_semantics_height, device=device)
+      x = torch.linspace(0, 1, width, device=device)
+      y = torch.linspace(0, 1, height, device=device)
       y_grid, x_grid = torch.meshgrid(y, x, indexing='ij')
       bev = torch.zeros(
-          (batch_size, 2, self.config.bev_semantics_height, self.config.bev_semantics_width),
+          (batch_size, 2, height, width),
           device=device,
       )
       bev[:, 0] = y_grid.unsqueeze(0)
       bev[:, 1] = x_grid.unsqueeze(0)
       return bev
     return torch.zeros(
-        (batch_size, 1, self.config.bev_semantics_height, self.config.bev_semantics_width),
+        (batch_size, 1, height, width),
         device=device,
     )
 
