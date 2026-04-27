@@ -603,6 +603,12 @@ if __name__ == '__main__':
           return cli_value
         return config_cli_values.get(flag[2:], default)
 
+      def get_effective_consumed_value(flag, consumed_value):
+        cli_value = get_unknown_arg_value(unknown, flag, None)
+        if cli_value is not None:
+          return cli_value
+        return consumed_value
+
       effective_summary = {
           'runtime': {
               'config_file': args.config_file,
@@ -631,8 +637,10 @@ if __name__ == '__main__':
               'train_towns': list(args.train_towns),
               'routes_folder': args.routes_folder,
               'route_repetitions': args.route_repetitions,
-              'rollout_steps_per_env': get_effective_forwarded_value('--rollout_steps_per_env'),
-              'minibatches_per_update': get_effective_forwarded_value('--minibatches_per_update'),
+              'rollout_steps_per_env': get_effective_consumed_value('--rollout_steps_per_env',
+                                                                     rollout_steps_per_env),
+              'minibatches_per_update': get_effective_consumed_value('--minibatches_per_update',
+                                                                     minibatches_per_update),
           },
           'ppo': {
               'total_timesteps': get_effective_forwarded_value('--total_timesteps'),

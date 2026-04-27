@@ -814,13 +814,17 @@ def main():
                                          rank=rank,
                                          timeout=datetime.timedelta(minutes=45))
 
-  device_id = args.gpu_ids[rank]
+  if local_rank >= len(args.gpu_ids):
+    raise ValueError(
+        f'LOCAL_RANK={local_rank} cannot be mapped to gpu_ids={args.gpu_ids}. '
+        'Pass one --gpu_ids entry per local torchrun process.')
+
+  device_id = args.gpu_ids[local_rank]
   print(device_id)
   if device_id < 0:
     print('ERROR! Device id must be positive.')
 
-  device = torch.device(f'cuda:{args.gpu_ids[rank]}') if torch.cuda.is_available() and args.cuda else torch.device(
-      'cpu')
+  device = torch.device(f'cuda:{device_id}') if torch.cuda.is_available() and args.cuda else torch.device('cpu')
 
   if torch.cuda.is_available() and args.cuda:
     torch.cuda.device(device)
@@ -1180,8 +1184,7 @@ def main():
         advantages = returns - values
 
     if config.cpu_collect:
-      device = torch.device(f'cuda:{args.gpu_ids[rank]}') if torch.cuda.is_available() and args.cuda else torch.device(
-          'cpu')
+      device = torch.device(f'cuda:{device_id}') if torch.cuda.is_available() and args.cuda else torch.device('cpu')
       agent.to(device)
 
     exploration_suggests = np.zeros((num_collected_steps, args.num_envs_per_proc), dtype=np.int32)
