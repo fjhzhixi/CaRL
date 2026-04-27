@@ -688,8 +688,8 @@ if __name__ == '__main__':
             shell=True, stdout=train_out, stderr=train_err)
       else:
         train_process = subprocess.Popen(  # pylint: disable=locally-disabled, consider-using-with
-            f'bash start_learner_dd_ppo.sh {git_root} {num_processes} {args.num_nodes} {args.rdzv_addr} '
-            f'{args.rdzv_port} {cmdline} --ports {str_ports} --logdir {raw_logdir} --load_file {load_file} '
+          f'bash start_learner_dd_ppo.sh {git_root} {num_processes} {args.num_nodes} {args.node_id} {args.rdzv_addr} '
+          f'{args.rdzv_port} {cmdline} --ports {str_ports} --logdir {raw_logdir} --load_file {load_file} '
             f'--num_envs_per_proc {num_envs_per_proc} --tcp_store_port {tcp_store_port}',
             shell=True, stdout=train_out, stderr=train_err)
 
